@@ -8,7 +8,7 @@ Ličan alat Studija SubRoo. Klon ideje Controlla Stacks, napisan od nule.
 
 ## Instalacija
 
-**Windows (VST3):** iz GitHub Actions artefakta `SubHarm-Windows-VST3` desni klik na `Install-SubHarm.ps1` → *Run with PowerShell*. Plugin ide u `C:\Program Files\Common Files\VST3`. Posle toga uradi rescan plugina u DAW-u.
+**Windows (VST3):** raspakuj zip i dvoklikni `Install-SubHarm.bat` (traži admin jednom). Plugin ide u `C:\Program Files\Common Files\VST3`. Posle toga uradi rescan plugina u DAW-u.
 
 **macOS (VST3 + AU, Apple silicon i Intel):** raspakuj `SubHarm-macOS.zip` i dvoklikni `install-subharm.command`.
 

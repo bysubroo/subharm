@@ -57,6 +57,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item -Recurse build/src/plugin/SubHarm_artefacts/Release/VST3/SubHarm.vst3 dist/
+          Copy-Item installer/windows/Install-SubHarm.bat dist/
           Copy-Item installer/windows/Install-SubHarm.ps1 dist/
           Copy-Item README.md dist/
       - uses: actions/upload-artifact@v4

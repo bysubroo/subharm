@@ -1,0 +1,105 @@
+name: Build SubHarm
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-linux:
+    name: Tests (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+            libxcomposite-dev libfontconfig1-dev libfreetype-dev libgl1-mesa-dev libx11-dev libxext-dev xvfb
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --target subharm_core_test subharm_host_test -j 4
+      - name: Core test (chords, key, harmony, render pitch check)
+        run: |
+          mkdir -p out
+          ./build/tests/subharm_core_test out
+      - name: DAW session test (record, stack, playback, save/restore, export, UI)
+        run: |
+          mkdir -p out/host
+          xvfb-run -a ./build/tests/subharm_host_test_artefacts/Release/subharm_host_test out/host out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubHarm-test-audio
+          path: out/
+
+  windows:
+    name: Windows VST3
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DSUBHARM_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build --config Release --target SubHarm_VST3 subharm_core_test -- /m
+      - name: Core test
+        run: |
+          mkdir out
+          .\build\tests\Release\subharm_core_test.exe out
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Recurse build/src/plugin/SubHarm_artefacts/Release/VST3/SubHarm.vst3 dist/
+          Copy-Item installer/windows/Install-SubHarm.ps1 dist/
+          Copy-Item README.md dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubHarm-Windows-VST3
+          path: dist/
+
+  macos:
+    name: macOS VST3 + AU (Universal)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSUBHARM_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --config Release --target SubHarm_VST3 SubHarm_AU -- -quiet
+      - name: Ad-hoc sign + package
+        run: |
+          mkdir -p dist
+          cp -R build/src/plugin/SubHarm_artefacts/Release/VST3/SubHarm.vst3 dist/
+          cp -R build/src/plugin/SubHarm_artefacts/Release/AU/SubHarm.component dist/
+          codesign --force --deep -s - dist/SubHarm.vst3
+          codesign --force --deep -s - dist/SubHarm.component
+          cp installer/macos/install-subharm.command dist/
+          chmod +x dist/install-subharm.command
+          cp README.md dist/
+          cd dist && zip -qry ../SubHarm-macOS.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubHarm-macOS
+          path: SubHarm-macOS.zip
+
+  release:
+    name: GitHub release (tags only)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ test-linux, windows, macos ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Zip Windows build
+        run: cd artifacts/SubHarm-Windows-VST3 && zip -qry ../../SubHarm-Windows.zip .
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SubHarm-Windows.zip
+            artifacts/SubHarm-macOS/SubHarm-macOS.zip

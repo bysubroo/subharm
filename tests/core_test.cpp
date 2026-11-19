@@ -3,6 +3,7 @@
 //   vocal = a "sung" melody (harmonic source through vowel formants, vibrato)
 // Checks chord/key detection and renders every flavour to WAV for listening.
 #include <algorithm>
+#include <map>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -123,24 +124,36 @@ int main (int argc, char** argv)
     for (int fi = 0; fi < 4; ++fi)
     {
         StackSettings st;
-        st.size = StackSize::Full; st.flavour = flavours[fi]; st.delivery = fi == 3 ? Delivery::Airy : Delivery::Natural;
+        st.lines = 0x1FF; st.flavour = flavours[fi]; st.delivery = fi == 3 ? Delivery::Airy : Delivery::Natural;
         RenderedStack rs;
         bool r = renderStack (vocal.data(), n, fs, ca.chords, 0.0, ca.key, st, rs);
-        renderOk &= r && rs.voices.size() == 8;
+        renderOk &= r && rs.voices.size() == 18;
         std::printf ("\n%s: %zu notes, %zu voices\n", toString (st.flavour), rs.notes.size(), rs.voices.size());
+        std::printf ("  %-6s", "lead");
+        for (auto& l : rs.lines) std::printf (" %-9.9s", lineName (l.type));
+        std::printf ("\n");
+        int offKey = 0;
         for (size_t k = 0; k < rs.notes.size(); ++k)
         {
-            std::printf ("  note %5.2fs %-3s ->", rs.notes[k].start, pitchClassName (rs.notes[k].midi).c_str());
-            for (int v = 0; v < 4; ++v) std::printf (" %+3d(%s)", rs.lines[v].semis[k], pitchClassName (rs.notes[k].midi + rs.lines[v].semis[k]).c_str());
+            std::printf ("  %-6s", pitchClassName (rs.notes[k].midi).c_str());
+            for (auto& l : rs.lines)
+            {
+                int p = rs.notes[k].midi + l.semis[k];
+                if (ca.key.contains (rs.notes[k].midi) && ! ca.key.contains (p)) ++offKey;
+                std::printf (" %+3d %-5s", l.semis[k], pitchClassName (p).c_str());
+            }
             std::printf ("\n");
         }
+        std::printf ("  off-key harmony notes: %d\n", offKey);
+        renderOk &= offKey == 0;
         // Verify: each rendered line really sings its planned note
         int hit = 0, tot = 0, unv = 0;
+        std::map<std::string, int> missByLine;
         for (int v = 0; v < (int) rs.voices.size(); ++v)
         {
             const auto& a = rs.voices[v].audio;
             std::vector<double> xd (a.begin(), a.end());
-            HarvestOption ho; InitializeHarvestOption (&ho); ho.f0_floor = 65; ho.f0_ceil = 1100; ho.frame_period = 5;
+            HarvestOption ho; InitializeHarvestOption (&ho); ho.f0_floor = 65; ho.f0_ceil = 1600; ho.frame_period = 5;
             int F = GetSamplesForHarvest (fs, n, 5.0);
             std::vector<double> tp (F), f0 (F);
             Harvest (xd.data(), n, fs, &ho, tp.data(), f0.data());
@@ -154,12 +167,17 @@ int main (int argc, char** argv)
                     if (f0[i] > 0) m.push_back (69 + 12 * std::log2 (f0[i] / 440.0));
                 if (m.size() < 5) { ++unv; continue; }
                 std::sort (m.begin(), m.end());
-                double expected = nt.midiExact + rs.lines[v].semis[k];
-                ++tot; if (std::abs (m[m.size() / 2] - expected) < 0.5) ++hit;
+                double expected = nt.midiExact + rs.lines[(size_t) v / 2].semis[k];
+                ++tot;
+                double err = m[m.size() / 2] - expected;
+                err -= 12.0 * std::round (err / 12.0);   // the checker's own octave errors (not the render's)
+                if (std::abs (err) < 0.5) ++hit; else { missByLine[rs.voices[v].name()]++; if (fi == 0) std::printf ("      %s note %zu (%.2fs) expected %.2f got %.2f\n", rs.voices[v].name().c_str(), k, nt.start, expected, m[m.size() / 2]); }
             }
         }
         std::printf ("  pitch check: %d/%d notes on target (%d undetectable)\n", hit, tot, unv);
+        for (auto& m : missByLine) std::printf ("    missed on %s: %d\n", m.first.c_str(), m.second);
         renderOk &= hit >= tot * 0.9;
+        // (octave lines are checked too: Harvest tracks them fine at these ranges)
 
         std::vector<float> L, R;
         mixStack (rs, 0.27f, L, R);

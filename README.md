@@ -21,9 +21,9 @@ Ličan alat Studija SubRoo. Klon ideje Controlla Stacks, napisan od nule.
    - Lampica **SIDE CHAIN** u headeru zasvetli zeleno kad zvuk stiže.
 3. **RECORD THIS TRACK**, pa play u DAW-u. Stop kad završiš. Vokal i beat ulaze kao jedan take, bez bounce-a. Najbolje je da kreneš od početka takta.
 4. **Nacrtaj delove (parts)** prevlačenjem po vokalu. Ivice se hvataju za šesnaestine (Alt = slobodno). Klik na akord ako ga je pogrešno pročitao.
-5. **Voices / Delivery / Size / Flavour / Humanize**, pa **STACK HARMONIES**. Dok jedan deo renderuje, slobodno crtaš sledeći.
+5. **Key** (Auto ili ručno, može i pre snimanja), **Voices / Delivery**, pa izaberi **linije** (ili preset Short/Tall/Full), **Flavour / Humanize** → **STACK HARMONIES**. Dok jedan deo renderuje, slobodno crtaš sledeći.
 6. **Stackovi sviraju zaključani za transport DAW-a**, i u offline bounce-u. Štikliraj koje hoćeš da čuješ.
-7. **MIX** (jedan stereo track) ili **STEMS** (track po liniji, suvo) prevuci direktno na timeline. Fajl počinje od početka take-a, pa ga spusti na takt gde si krenuo sa snimanjem. Cubase može i *Move to Origin*, jer fajl nosi BWF timestamp. **Export...** snima sve u folder.
+7. **MIX** (jedan stereo track) ili **STEMS** (suvo, po liniji i strani: `SubHarm 3RD UP L`, `SubHarm 3RD UP R`, `SubHarm CHORD HARMONY HIGH L`...) prevuci direktno na timeline. Fajl počinje od početka take-a, pa ga spusti na takt gde si krenuo sa snimanjem. Cubase može i *Move to Origin*, jer fajl nosi BWF timestamp. **Export...** snima sve u folder.
 
 Projekat (take, akordi, delovi, stackovi) se čuva sa DAW projektom. Audio je u `Documents/SubHarm/Sessions/<id>/`.
 
@@ -31,8 +31,10 @@ Projekat (take, akordi, delovi, stackovi) se čuva sa DAW projektom. Audio je u 
 
 | Kontrola | Šta radi |
 |---|---|
-| **Size** | Short 3 · Tall 4 · Full 8 (4 linije, svaka dublirana L/R) |
-| **Flavour** | Clean: trozvuci. Pop: + add9. R&B: + septime i none. Gospel: + 11/13 i gusti klasteri |
+| **Key** | Auto (prepoznaje sam) ili ručno izabran ključ. Ručni ključ zaključava i akorde: prepoznaju se samo akordi iz tog ključa. Promena ključa posle snimanja ponovo čita akorde |
+| **Lines** | UNIS · 3RD UP · 3RD DOWN · 5TH UP · 5TH DOWN · OCT UP · OCT DOWN · CHORD HIGH · CHORD LOW. Svaka linija se peva dvaput (L + R take). Intervalne linije idu striktno po skali ključa, a CHORD linije biraju tonove akorda (u ključu) sa voice leadingom |
+| **Preset** | Short: 3RD UP + CHORD LOW · Tall: 3RD UP + 3RD DOWN + 5TH DOWN · Full: UNIS + 3RD UP + 3RD DOWN + OCT DOWN + CHORD HIGH |
+| **Flavour** | Boji CHORD linije. Clean: trozvuci. Pop: + add9. R&B: + septime i none. Gospel: + 11/13 |
 | **Humanize** | Tight / Natural / Loose: kašnjenje, drift visine i detune po glasu |
 | **Voices** | Your voice / Wide / Deeper / Lighter crew: formanti po glasu |
 | **Delivery** | Natural / Airy (dah u visinama) / Gentle (mekše, manje vibrata) / Full voice (telo) / Energetic (prezens) |

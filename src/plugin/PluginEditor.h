@@ -67,8 +67,10 @@ private:
     juce::ToggleButton leadThru { "Hear lead" };
     TimelineView timeline;
 
-    juce::ComboBox crewBox, deliveryBox;
-    Segment sizeSeg, flavourSeg, humanizeSeg;
+    juce::ComboBox keyBox, crewBox, deliveryBox;
+    juce::OwnedArray<juce::TextButton> lineButtons, presetButtons;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> lineAtts;
+    Segment flavourSeg, humanizeSeg;
     juce::TextButton stackButton;
     juce::Label stackInfo;
 
@@ -78,12 +80,13 @@ private:
     juce::Slider sauceKnob, levelKnob;
     juce::TextButton exportButton { "Export..." };
 
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> crewAtt, deliveryAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyAtt, crewAtt, deliveryAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sauceAtt, levelAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> leadAtt;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::Rectangle<int> headerArea, partsCard, voicesCard, singCard, stackCard, stacksCard, ledArea;
+    int slowTick = 0;
+    juce::Rectangle<int> headerArea, partsCard, voicesCard, singCard, stackCard, stacksCard, ledArea, linesArea;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SubHarmEditor)
 };

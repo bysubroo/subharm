@@ -68,7 +68,7 @@ namespace subharm::theme
             if (! b.isEnabled()) c = c.withAlpha (0.4f);
             g.setColour (c);
             g.fillRoundedRectangle (r, 6.0f);
-            if (! on && c == panelHi)
+            if (! on && b.findColour (juce::TextButton::buttonColourId) != accent)
             {
                 g.setColour (line);
                 g.drawRoundedRectangle (r, 6.0f, 1.0f);

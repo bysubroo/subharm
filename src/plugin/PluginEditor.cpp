@@ -109,12 +109,13 @@ void StacksList::paint (juce::Graphics& g)
 
         g.setColour (text);
         g.setFont (font (12.0f, true));
-        g.drawText (juce::String (toString (s->settings.size)) + juce::String::fromUTF8 (" · ") + toString (s->settings.flavour),
-                    66, y + 4, getWidth() - 110, 18, juce::Justification::centredLeft);
+        g.drawText (juce::String (numLines (s->settings.lines) * 2) + " voices" + juce::String::fromUTF8 (" · ") + toString (s->settings.flavour)
+                        + juce::String::fromUTF8 (" · ") + toString (s->settings.crew) + juce::String::fromUTF8 (" · ") + toString (s->settings.delivery)
+                        + juce::String::fromUTF8 (" · ") + toString (s->settings.humanize),
+                    66, y + 4, getWidth() - 190, 18, juce::Justification::centredLeft);
         g.setColour (dim);
-        g.setFont (font (10.5f));
-        g.drawText (juce::String (toString (s->settings.crew)) + juce::String::fromUTF8 (" · ") + toString (s->settings.delivery) + juce::String::fromUTF8 (" · ") + toString (s->settings.humanize),
-                    66, y + 20, getWidth() - 110, 16, juce::Justification::centredLeft);
+        g.setFont (font (10.0f));
+        g.drawText (s->label(), 66, y + 20, getWidth() - 190, 16, juce::Justification::centredLeft, true);
 
         const int st = s->state.load();
         if (st == StackEntry::Queued || st == StackEntry::Rendering)
@@ -154,7 +155,6 @@ static juce::RangedAudioParameter& param (SubHarmProcessor& p, const char* id) {
 
 SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     : AudioProcessorEditor (p), proc (p), timeline (p),
-      sizeSeg (param (p, "size"), { "Short 3", "Tall 4", "Full 8" }),
       flavourSeg (param (p, "flavour"), { "R&B", "Pop", "Clean", "Gospel" }),
       humanizeSeg (param (p, "humanize"), { "Tight", "Natural", "Loose" }),
       stacksList (p), mixTile (p, false), stemsTile (p, true)
@@ -171,6 +171,29 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     leadAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "leadThru", leadThru);
     addAndMakeVisible (timeline);
 
+    keyBox.addItemList (SubHarmProcessor::keyChoices(), 1);
+    addAndMakeVisible (keyBox);
+    keyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "key", keyBox);
+
+    static const char* shortNames[kNumLineTypes] = { "UNIS", "3RD UP", "3RD DOWN", "5TH UP", "5TH DOWN",
+                                                    "OCT UP", "OCT DOWN", "CHORD HIGH", "CHORD LOW" };
+    for (int i = 0; i < kNumLineTypes; ++i)
+    {
+        auto* b = lineButtons.add (new juce::TextButton (shortNames[i]));
+        b->setClickingTogglesState (true);
+        b->setTooltip (juce::String (lineName ((LineType) i)) + ": rendered as an L + R pair");
+        addAndMakeVisible (b);
+        lineAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, "line" + juce::String (i), *b));
+    }
+    const char* presetNames[3] = { "Short", "Tall", "Full" };
+    for (int i = 0; i < 3; ++i)
+    {
+        auto* b = presetButtons.add (new juce::TextButton (presetNames[i]));
+        b->onClick = [this, i] { proc.applyLinePreset ((StackSize) i); };
+        b->setColour (juce::TextButton::buttonColourId, panel.brighter (0.04f));
+        addAndMakeVisible (b);
+    }
+
     crewBox.addItemList ({ "Your voice", "Wide crew", "Deeper crew", "Lighter crew" }, 1);
     deliveryBox.addItemList ({ "Natural", "Airy", "Gentle", "Full voice", "Energetic" }, 1);
     addAndMakeVisible (crewBox);
@@ -178,7 +201,7 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     crewAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "crew", crewBox);
     deliveryAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "delivery", deliveryBox);
 
-    for (auto* s : { &sizeSeg, &flavourSeg, &humanizeSeg }) addAndMakeVisible (s);
+    for (auto* s : { &flavourSeg, &humanizeSeg }) addAndMakeVisible (s);
 
     stackButton.setButtonText ("STACK HARMONIES");
     stackButton.setColour (juce::TextButton::buttonColourId, accent);
@@ -225,8 +248,8 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
 
     proc.addChangeListener (this);
     setResizable (true, true);
-    setResizeLimits (1000, 760, 2200, 1500);
-    setSize (1120, 800);
+    setResizeLimits (1000, 820, 2200, 1500);
+    setSize (1120, 860);
     refresh();
     startTimerHz (30);
 }
@@ -272,7 +295,7 @@ void SubHarmEditor::paint (juce::Graphics& g)
     juce::String info;
     if (! take.isEmpty())
     {
-        info = take.analysed ? juce::String (take.key.name()) : juce::String ("...");
+        info = take.analysed ? juce::String (take.key.name()) + (take.keyForced ? "" : " (auto)") : juce::String ("...");
         if (take.bpm > 0) info << juce::String::fromUTF8 ("  ·  ") << juce::String (take.bpm, 1) << " BPM";
         const int secs = (int) take.lengthSeconds();
         info << juce::String::fromUTF8 ("  ·  ") << secs / 60 << ":" << juce::String (secs % 60).paddedLeft ('0', 2);
@@ -299,8 +322,21 @@ void SubHarmEditor::paint (juce::Graphics& g)
     g.setColour (dim);
     g.setFont (font (10.0f, true));
     auto lbl = [&] (juce::Component& c, const char* t) { g.drawText (t, singCard.getX() + 16, c.getY(), 80, c.getHeight(), juce::Justification::centredLeft); };
-    lbl (sizeSeg, "SIZE"); lbl (flavourSeg, "FLAVOUR"); lbl (humanizeSeg, "HUMANIZE");
-    g.drawText ("VOICES", voicesCard.getX() + 16, crewBox.getY() - 16, 120, 14, juce::Justification::centredLeft);
+    lbl (flavourSeg, "FLAVOUR"); lbl (humanizeSeg, "HUMANIZE");
+    if (! lineButtons.isEmpty())
+    {
+        g.drawText ("LINES", singCard.getX() + 16, lineButtons[0]->getY(), 80, lineButtons[0]->getHeight(), juce::Justification::centredLeft);
+        g.drawText ("PRESET", singCard.getX() + 16, presetButtons[0]->getY(), 80, presetButtons[0]->getHeight(), juce::Justification::centredLeft);
+        g.setColour (faint);
+        g.setFont (font (9.5f));
+        g.drawText ("every line = L + R take", presetButtons[2]->getRight() + 10,
+                    presetButtons[0]->getY(), singCard.getRight() - presetButtons[2]->getRight() - 24, presetButtons[0]->getHeight(),
+                    juce::Justification::centredLeft);
+        g.setColour (dim);
+        g.setFont (font (10.0f, true));
+    }
+    g.drawText ("KEY", keyBox.getX(), keyBox.getY() - 16, 120, 14, juce::Justification::centredLeft);
+    g.drawText ("VOICES", crewBox.getX(), crewBox.getY() - 16, 120, 14, juce::Justification::centredLeft);
     g.drawText ("DELIVERY", deliveryBox.getX(), deliveryBox.getY() - 16, 120, 14, juce::Justification::centredLeft);
     drawCard (g, stackCard, "4", "STACK HARMONIES");
     drawCard (g, stacksCard, "5", "YOUR STACKS");
@@ -325,7 +361,7 @@ void SubHarmEditor::resized()
     }
     r.removeFromTop (8);
 
-    partsCard = r.removeFromTop ((int) (r.getHeight() * 0.42f));
+    partsCard = r.removeFromTop ((int) (r.getHeight() * 0.40f));
     timeline.setBounds (partsCard.reduced (12).withTrimmedTop (30));
     {
         auto zr = juce::Rectangle<int> (partsCard.getRight() - 140, partsCard.getY() + 9, 126, 26);
@@ -344,7 +380,10 @@ void SubHarmEditor::resized()
     voicesCard = left.removeFromTop (92);
     {
         auto c = voicesCard.reduced (16).withTrimmedTop (40);
-        crewBox.setBounds (c.removeFromLeft (c.getWidth() / 2 - 6));
+        const int w = (c.getWidth() - 24) / 3;
+        keyBox.setBounds (c.removeFromLeft (w));
+        c.removeFromLeft (12);
+        crewBox.setBounds (c.removeFromLeft (w));
         c.removeFromLeft (12);
         deliveryBox.setBounds (c);
     }
@@ -360,13 +399,30 @@ void SubHarmEditor::resized()
     singCard = left;
     {
         auto c = singCard.reduced (16).withTrimmedTop (32);
-        const int rowH = juce::jlimit (24, 38, c.getHeight() / 3 - 6);
-        for (auto* s : { &sizeSeg, &flavourSeg, &humanizeSeg })
+        const int rowH = juce::jlimit (22, 34, c.getHeight() / 5 - 5);
+        // lines: two rows (5 + 4)
+        for (int rowIdx = 0; rowIdx < 2; ++rowIdx)
+        {
+            auto row = c.removeFromTop (rowH);
+            row.removeFromLeft (84);
+            const int first = rowIdx == 0 ? 0 : 5, count = rowIdx == 0 ? 5 : 4;
+            const int bw = row.getWidth() / 5;
+            for (int i = 0; i < count; ++i) lineButtons[first + i]->setBounds (row.removeFromLeft (bw).reduced (2, 0));
+            c.removeFromTop (4);
+        }
+        {
+            auto row = c.removeFromTop (rowH);
+            row.removeFromLeft (84);
+            const int bw = row.getWidth() / 5;
+            for (auto* b : presetButtons) b->setBounds (row.removeFromLeft (bw).reduced (2, 2));
+            c.removeFromTop (8);
+        }
+        for (auto* s : { &flavourSeg, &humanizeSeg })
         {
             auto row = c.removeFromTop (rowH);
             row.removeFromLeft (84);
             s->setBounds (row);
-            c.removeFromTop (6);
+            c.removeFromTop (4);
         }
     }
 
@@ -404,9 +460,11 @@ void SubHarmEditor::refresh()
 
     const auto& take = proc.getTake();
     const int pending = proc.numPendingParts();
-    stackButton.setEnabled (! take.isEmpty() && take.analysed && (pending > 0 || proc.selectedPart > 0));
+    const bool anyLine = proc.currentSettings().lines != 0;
+    stackButton.setEnabled (! take.isEmpty() && take.analysed && anyLine && (pending > 0 || proc.selectedPart > 0));
     if (take.isEmpty()) stackInfo.setText ("record a take first", juce::dontSendNotification);
     else if (! take.analysed) stackInfo.setText ("reading the song...", juce::dontSendNotification);
+    else if (! anyLine) stackInfo.setText ("pick at least one line", juce::dontSendNotification);
     else if (proc.getParts().empty()) stackInfo.setText ("draw a part on your vocal", juce::dontSendNotification);
     else if (pending > 0) stackInfo.setText (juce::String (pending) + (pending == 1 ? " new part to stack" : " new parts to stack"), juce::dontSendNotification);
     else stackInfo.setText (juce::String::fromUTF8 ("all parts stacked  ·  click to re-stack the selected part with these settings"), juce::dontSendNotification);
@@ -427,8 +485,8 @@ void SubHarmEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 
 void SubHarmEditor::timerCallback()
 {
-    sizeSeg.update(); flavourSeg.update(); humanizeSeg.update();
-    if (proc.getRecState() != SubHarmProcessor::RecState::Idle) refresh();
+    flavourSeg.update(); humanizeSeg.update();
+    if (proc.getRecState() != SubHarmProcessor::RecState::Idle || ++slowTick % 10 == 0) refresh();
     timeline.followPlayhead();
     repaint (ledArea.expanded (4));
 }

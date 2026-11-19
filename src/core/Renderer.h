@@ -14,8 +14,9 @@ struct RenderedVoice
     std::vector<float> audio;   // mono, dry, same length as the part
     float pan = 0.0f;           // -1..1 (before Sauce width)
     float gain = 1.0f;
-    int slot = 0;
-    bool isDouble = false;
+    LineType type = LineType::ThirdUp;
+    int side = -1;              // -1 = L, +1 = R
+    std::string name() const;   // "3RD UP L" etc.
 };
 
 struct RenderedStack

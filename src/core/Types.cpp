@@ -60,8 +60,47 @@ std::vector<int> Key::scalePitchClasses() const
     return r;
 }
 
-int numDistinctLines (StackSize s) { return s == StackSize::Short ? 3 : 4; }
-int numVoices (StackSize s)        { return s == StackSize::Short ? 3 : (s == StackSize::Tall ? 4 : 8); }
+bool Key::contains (int pc) const
+{
+    for (int s : scalePitchClasses()) if (s == ((pc % 12) + 12) % 12) return true;
+    return false;
+}
+
+int numLines (uint32_t mask)
+{
+    int n = 0;
+    for (int i = 0; i < kNumLineTypes; ++i) n += (mask >> i) & 1;
+    return n;
+}
+
+const char* lineName (LineType t)
+{
+    switch (t)
+    {
+        case LineType::Unison:     return "UNIS";
+        case LineType::ThirdUp:    return "3RD UP";
+        case LineType::ThirdDown:  return "3RD DOWN";
+        case LineType::FifthUp:    return "5TH UP";
+        case LineType::FifthDown:  return "5TH DOWN";
+        case LineType::OctaveUp:   return "OCTAVE UP";
+        case LineType::OctaveDown: return "OCTAVE DOWN";
+        case LineType::ChordHigh:  return "CHORD HARMONY HIGH";
+        case LineType::ChordLow:   return "CHORD HARMONY LOW";
+        default:                   return "?";
+    }
+}
+
+uint32_t presetLines (StackSize s)
+{
+    auto bit = [] (LineType t) { return 1u << (int) t; };
+    switch (s)
+    {
+        case StackSize::Short: return bit (LineType::ThirdUp) | bit (LineType::ChordLow);
+        case StackSize::Tall:  return bit (LineType::ThirdUp) | bit (LineType::ThirdDown) | bit (LineType::FifthDown);
+        default:               return bit (LineType::Unison) | bit (LineType::ThirdUp) | bit (LineType::ChordHigh)
+                                    | bit (LineType::ThirdDown) | bit (LineType::OctaveDown);
+    }
+}
 
 const char* toString (StackSize s)
 {

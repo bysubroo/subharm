@@ -29,6 +29,7 @@ struct Take
     std::vector<ChordSeg> chords;
     Key key;
     bool analysed = false;
+    bool keyForced = false;            // key chosen by you (not detected)
     bool hasSidechain = false;
 
     static constexpr int kPeakBlock = 256;
@@ -128,6 +129,9 @@ public:
     void setStackEnabled (int stackId, bool enabled);
     void removeStack (int stackId);
     StackSettings currentSettings() const;
+    void applyLinePreset (StackSize preset);
+    static juce::StringArray keyChoices();
+    bool forcedKey (Key& out) const;    // false = Auto
 
     juce::StringArray exportForDrag (bool stems);   // writes WAVs, returns paths
     bool exportToFolder (const juce::File& folder, bool stems);
@@ -187,6 +191,7 @@ private:
     juce::SpinLock playLock;
     std::shared_ptr<PlaybackSet> playback;
     float lastSauce = -1.0f;
+    int lastKeyChoice = -1;
     int sauceDirtyTicks = 0;
 
     std::atomic<float>* stackLevelParam = nullptr;

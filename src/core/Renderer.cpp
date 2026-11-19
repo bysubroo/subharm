@@ -16,6 +16,11 @@
 namespace subharm
 {
 
+std::string RenderedVoice::name() const
+{
+    return std::string (lineName (type)) + (side < 0 ? " L" : " R");
+}
+
 namespace
 {
     struct HumanizeParams { double timeMs, detuneCents, driftCents; };
@@ -143,6 +148,29 @@ std::shared_ptr<LeadAnalysis> analyseLead (const float* vocal, int n, int fs, co
     Harvest (x.data(), n, fs, &ho, tpos.data(), la->f0.data());
     if (! report (0.55f)) return nullptr;
 
+    // Octave-error repair: a short run at ~2x or ~0.5x of its surroundings is a tracking
+    // mistake, not a sung note (it caused audible jumps in the harmonies).
+    {
+        auto& f = la->f0;
+        std::vector<double> ref (F, 0.0);
+        for (int i = 0; i < F; ++i)
+        {
+            if (f[i] <= 0) continue;
+            std::vector<double> w;
+            for (int j = std::max (0, i - 25); j <= std::min (F - 1, i + 25); ++j)
+                if (f[j] > 0) w.push_back (std::log2 (f[j]));
+            std::nth_element (w.begin(), w.begin() + (long) w.size() / 2, w.end());
+            ref[i] = w[w.size() / 2];
+        }
+        for (int i = 0; i < F; ++i)
+        {
+            if (f[i] <= 0) continue;
+            const double d = std::log2 (f[i]) - ref[i];
+            if (std::abs (d - 1.0) < 0.2) f[i] *= 0.5;
+            else if (std::abs (d + 1.0) < 0.2) f[i] *= 2.0;
+        }
+    }
+
     CheapTrickOption co; InitializeCheapTrickOption (fs, &co);
     co.f0_floor = 71.0;
     co.fft_size = GetFFTSizeForCheapTrick (fs, &co);
@@ -206,11 +234,20 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
         breathCurve[k] = smoothstep (1200.0, 5000.0, f);                         // breath lives up high
     }
 
-    const int V = (int) out.lines.size();
-    const bool shortStack = st.size == StackSize::Short;
-    const float linePans[4] = { -0.35f, 0.35f, -0.65f, 0.65f };
-    const float shortPans[3] = { -0.45f, 0.45f, 0.0f };
-    const float norm = 0.55f / std::sqrt (V / 3.0f);
+    const int V = (int) out.lines.size() * 2;   // every line sung twice: L + R
+    if (V == 0) return false;
+    auto panFor = [] (LineType t)
+    {
+        switch (t)
+        {
+            case LineType::Unison:     return 0.25f;
+            case LineType::ThirdUp:    case LineType::ThirdDown: return 0.45f;
+            case LineType::FifthUp:    case LineType::FifthDown: return 0.6f;
+            case LineType::OctaveUp:   case LineType::OctaveDown: return 0.7f;
+            default:                   return 0.5f;
+        }
+    };
+    const float norm = 0.5f / std::sqrt (V / 4.0f);
 
     out.voices.resize (V);
     std::atomic<int> nextVoice { 0 }, doneVoices { 0 };
@@ -220,7 +257,10 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
                             std::vector<const double*>& vspP, std::vector<const double*>& vapP,
                             std::vector<double>& vf0, std::vector<double>& y, std::vector<double>& tmp)
     {
-        const auto& line = out.lines[v];
+        const auto& line = out.lines[(size_t) v / 2];
+        const int side = (v % 2 == 0) ? -1 : 1;
+        const bool lowLine = line.type == LineType::ThirdDown || line.type == LineType::FifthDown
+                             || line.type == LineType::OctaveDown || line.type == LineType::ChordLow;
         Rng rng (st.seed * 7919u + (uint32_t) v * 104729u + 17u);
 
         // Semitone shift per source frame (unvoiced frames hold the nearest note)
@@ -244,9 +284,9 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
         SlowNoise timeNoise (rng), pitchNoise (rng, 0.2, 0.9);
         const double detune = hp.detuneCents * rng.bipolar() / 100.0;
         double alpha = 1.0 + crewFormantBase (st.crew) + crewFormantSpread (st.crew) * rng.bipolar() + dp.formant;
-        if (line.slot == 2) alpha -= 0.015;   // the low line sounds like a lower singer
-        if (line.doubleOf >= 0) alpha += 0.012 * rng.bipolar();
-        const double breath = dp.breath + (line.doubleOf >= 0 ? 0.03 : 0.0);
+        if (lowLine) alpha -= 0.015;          // low lines sound like lower singers
+        alpha += 0.012 * side;                // L and R are two slightly different takes
+        const double breath = dp.breath + (side > 0 ? 0.02 : 0.0);
 
         for (int i = 0; i < F; ++i)
         {
@@ -290,8 +330,8 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
         Synthesis (vf0.data(), F, vspP.data(), vapP.data(), fftSize, framePeriod, fs, n, y.data());
 
         RenderedVoice rv;
-        rv.slot = line.slot;
-        rv.isDouble = line.doubleOf >= 0;
+        rv.type = line.type;
+        rv.side = side;
         rv.audio.resize (n);
         const int fade = std::max (1, fs / 100);
         for (int s = 0; s < n; ++s)
@@ -301,9 +341,8 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
             if (n - 1 - s < fade) g = std::min (g, (n - 1 - s) / (float) fade);
             rv.audio[s] = (float) y[s] * g;
         }
-        const float basePan = shortStack ? shortPans[line.slot % 3] : linePans[line.slot % 4];
-        rv.pan = rv.isDouble ? -basePan : basePan;
-        rv.gain = norm * (float) dp.gain * (rv.isDouble ? 0.85f : 1.0f) * (line.slot == 2 ? 0.9f : 1.0f);
+        rv.pan = panFor (line.type) * (float) side;
+        rv.gain = norm * (float) dp.gain * (lowLine ? 0.9f : 1.0f) * (line.type == LineType::OctaveUp ? 0.8f : 1.0f);
         out.voices[v] = std::move (rv);
     };
 

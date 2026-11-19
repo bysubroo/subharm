@@ -12,11 +12,12 @@ std::vector<NoteSeg> segmentNotes (const std::vector<double>& f0, double framePe
 struct VoiceLine
 {
     std::vector<int> semis;   // shift in semitones per lead note
-    int slot = 0;             // which line of the stack (0 = upper third, 1 = lower, ...)
-    int doubleOf = -1;        // >= 0: this voice doubles that line (full stack)
+    LineType type = LineType::ThirdUp;
 };
 
-// The voicing brain: picks a harmony note for every lead note from the chord under it.
+// The voicing brain. Interval lines (3rd/5th/octave/unison) move strictly in the key,
+// chord lines pick chord tones (flavour colours them) with voice leading.
+// One VoiceLine per enabled LineType; the renderer sings each one twice (L + R).
 //   partOffset  seconds from take start to the part start (notes are part-relative)
 std::vector<VoiceLine> generateHarmony (const std::vector<NoteSeg>& notes,
                                         const std::vector<ChordSeg>& chords,

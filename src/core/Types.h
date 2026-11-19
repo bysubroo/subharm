@@ -37,6 +37,7 @@ struct Key
     bool minor = false;
     std::string name() const;
     std::vector<int> scalePitchClasses() const;
+    bool contains (int pc) const;
 };
 
 struct NoteSeg
@@ -47,7 +48,17 @@ struct NoteSeg
     int firstFrame = 0, lastFrame = 0;
 };
 
-enum class StackSize { Short = 0, Tall, Full };       // 3, 4, 8 voices
+enum class StackSize { Short = 0, Tall, Full };       // presets for the line matrix
+
+// Every line is rendered as an L + R pair (two takes of the same part).
+enum class LineType : int
+{
+    Unison = 0, ThirdUp, ThirdDown, FifthUp, FifthDown, OctaveUp, OctaveDown, ChordHigh, ChordLow, Count
+};
+constexpr int kNumLineTypes = (int) LineType::Count;
+const char* lineName (LineType);          // "3RD UP", "CHORD HARMONY LOW", ...
+uint32_t presetLines (StackSize);         // bit mask of LineType
+inline bool hasLine (uint32_t mask, LineType t) { return (mask >> (int) t) & 1u; }
 enum class Flavour   { RnB = 0, Pop, Clean, Gospel };
 enum class Humanize  { Tight = 0, Natural, Loose };
 enum class Crew      { Natural = 0, Wide, Deeper, Lighter };
@@ -57,7 +68,7 @@ constexpr double kPi = 3.14159265358979323846;
 
 struct StackSettings
 {
-    StackSize size = StackSize::Full;
+    uint32_t lines = 0;                     // bit mask of LineType (0 -> Full preset)
     Flavour flavour = Flavour::RnB;
     Humanize humanize = Humanize::Natural;
     Crew crew = Crew::Natural;
@@ -65,8 +76,7 @@ struct StackSettings
     uint32_t seed = 1;
 };
 
-int numDistinctLines (StackSize s);   // 3, 4, 4
-int numVoices (StackSize s);          // 3, 4, 8 (full = 4 lines doubled)
+int numLines (uint32_t mask);
 
 const char* toString (StackSize);
 const char* toString (Flavour);

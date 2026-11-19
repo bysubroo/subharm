@@ -67,7 +67,7 @@ Key detectKey (const std::array<double, 12>& chroma)
     return best;
 }
 
-ChordAnalysisResult analyseChords (const float* x, int n, double fs, double bpm, double firstBeatOffset)
+ChordAnalysisResult analyseChords (const float* x, int n, double fs, double bpm, double firstBeatOffset, const Key* forcedKey)
 {
     ChordAnalysisResult result;
     if (n <= 0 || fs <= 0)
@@ -195,7 +195,7 @@ ChordAnalysisResult analyseChords (const float* x, int n, double fs, double bpm,
         for (int i = 0; i < 12; ++i) total[i] += tr[i];
     }
 
-    Key chromaKey = detectKey (total);
+    Key chromaKey = forcedKey ? *forcedKey : detectKey (total);
     result.key = chromaKey;
 
     // ---- Viterbi over chord states ----
@@ -219,7 +219,10 @@ ChordAnalysisResult analyseChords (const float* x, int n, double fs, double bpm,
             double sc = cosine (beatTreble[b], templates[s]);
             sc += 0.22 * beatBass[b][r];                  // bass note supports the root
             sc += kQualityPrior[q];
-            sc += inKey (r) ? 0.02 : 0.0;                 // gentle diatonic preference
+            bool diatonic = true;
+            for (int iv : Chord { r, (Quality) q }.intervals()) diatonic &= inKey ((r + iv) % 12);
+            if (! diatonic) sc -= forcedKey ? 0.3 : 0.05;   // chords outside the key
+
             emit[b][s] = silent ? -1.0 : sc;
         }
         emit[b][NC] = silent ? 1.0 : 0.25;
@@ -259,6 +262,7 @@ ChordAnalysisResult analyseChords (const float* x, int n, double fs, double bpm,
 
     // Refine the key with the chord sequence: diatonic chords, tonic chord and the
     // first/last chord of the take all vote. The chroma key gets a head start.
+    if (forcedKey == nullptr)
     {
         double bestScore = -1e9; Key best = chromaKey;
         for (int t = 0; t < 12; ++t)

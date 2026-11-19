@@ -116,6 +116,19 @@ int main (int argc, char** argv)
     check (take.key.tonic == 0 && ! take.key.minor, "key = C major");
     check (chordStr.trim() == "C G Am F", "chords = C G Am F");
 
+    // ---------- 2b. key chosen by hand -> chords re-read inside that key ----------
+    {
+        auto* kp = proc->apvts.getParameter ("key");
+        kp->setValueNotifyingHost (kp->convertTo0to1 (1.0f));   // "C major"
+        pump (200);
+        for (int i = 0; i < 100 && proc->isAnalysing(); ++i) pump (100);
+        pump (200);
+        juce::String cs2;
+        for (auto& c : proc->getTake().chords) cs2 << c.chord.name() << " ";
+        check (proc->getTake().keyForced && proc->getTake().key.tonic == 0 && ! proc->getTake().key.minor
+               && cs2.trim() == "C G Am F", "key set to C major by hand, chords re-read: " + cs2.trim());
+    }
+
     // ---------- 3. parts + stacks ----------
     const double bar = 4 * 60.0 / 96.0;
     int partA = proc->addPart (0.0, 2 * bar);
@@ -172,7 +185,14 @@ int main (int argc, char** argv)
     auto mix = proc->exportForDrag (false);
     auto stems = proc->exportForDrag (true);
     check (mix.size() == 1, "MIX file written");
-    check (stems.size() == 8, "STEMS: " + juce::String (stems.size()) + " files (full stack = 8 lines)");
+    {
+        juce::StringArray stemNames;
+        for (auto& f : stems) stemNames.add (juce::File (f).getFileNameWithoutExtension());
+        std::printf ("       stems: %s\n", stemNames.joinIntoString (", ").toRawUTF8());
+        check (stems.size() == 10 && stemNames.contains ("SubHarm 3RD UP L") && stemNames.contains ("SubHarm CHORD HARMONY HIGH R")
+               && stemNames.contains ("SubHarm OCTAVE DOWN L") && stemNames.contains ("SubHarm UNIS R"),
+               "STEMS: " + juce::String (stems.size()) + " files named by line + side (Full preset = 5 lines x L/R)");
+    }
     if (mix.size() == 1)
     {
         auto m = readWav (juce::File (mix[0]));
@@ -197,7 +217,7 @@ int main (int argc, char** argv)
         // ---------- 7. UI snapshot ----------
         proc2->selectedPart = 1;
         std::unique_ptr<juce::AudioProcessorEditor> ed (proc2->createEditorIfNeeded());
-        ed->setSize (1120, 800);
+        ed->setSize (1120, 860);
         pump (200);
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         juce::PNGImageFormat png;

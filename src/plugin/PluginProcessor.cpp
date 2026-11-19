@@ -22,8 +22,29 @@ void Take::computePeaks()
 
 juce::String StackEntry::label() const
 {
-    return juce::String (toString (settings.size)) + juce::String::fromUTF8 (" · ") + toString (settings.flavour) + juce::String::fromUTF8 (" · ")
-         + toString (settings.humanize) + juce::String::fromUTF8 (" · ") + toString (settings.crew) + juce::String::fromUTF8 (" · ") + toString (settings.delivery);
+    juce::StringArray names;
+    for (int i = 0; i < kNumLineTypes; ++i)
+        if (hasLine (settings.lines, (LineType) i)) names.add (lineName ((LineType) i));
+    return names.joinIntoString (juce::String::fromUTF8 (" · "));
+}
+
+juce::StringArray SubHarmProcessor::keyChoices()
+{
+    juce::StringArray k { "Auto (detect)" };
+    for (int t = 0; t < 12; ++t)
+    {
+        k.add (pitchClassName (t) + " major");
+        k.add (pitchClassName (t) + " minor");
+    }
+    return k;
+}
+
+bool SubHarmProcessor::forcedKey (Key& out) const
+{
+    const int c = (int) apvts.getRawParameterValue ("key")->load();
+    if (c <= 0) return false;
+    out = { (c - 1) / 2, ((c - 1) % 2) == 1 };
+    return true;
 }
 
 // =====================================================================================
@@ -38,7 +59,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SubHarmProcessor::createLayo
                                                   NormalisableRange<float> (0.0f, 100.0f, 1.0f), 27.0f,
                                                   AudioParameterFloatAttributes().withLabel ("%")));
     l.add (std::make_unique<AudioParameterBool> (ParameterID { "leadThru", 1 }, "Lead through", true));
-    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "size", 1 }, "Size", StringArray { "Short", "Tall", "Full" }, 2));
+    l.add (std::make_unique<AudioParameterChoice> (ParameterID { "key", 1 }, "Key", keyChoices(), 0));
+    const auto full = presetLines (StackSize::Full);
+    for (int i = 0; i < kNumLineTypes; ++i)
+        l.add (std::make_unique<AudioParameterBool> (ParameterID { "line" + String (i), 1 }, lineName ((LineType) i),
+                                                     hasLine (full, (LineType) i)));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "flavour", 1 }, "Flavour", StringArray { "R&B", "Pop", "Clean", "Gospel" }, 0));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "humanize", 1 }, "Humanize", StringArray { "Tight", "Natural", "Loose" }, 1));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "crew", 1 }, "Voices", StringArray { "Your voice", "Wide crew", "Deeper crew", "Lighter crew" }, 0));
@@ -283,8 +308,12 @@ void SubHarmProcessor::startTakeAnalysis()
     auto vocal = take.vocal; auto beat = take.beat;
     const double sr = take.sampleRate, bpm = take.bpm, ppq = take.hostStartPpq;
     const bool hasSide = take.hasSidechain;
+    Key fk;
+    const bool forced = forcedKey (fk);
+    take.keyForced = forced;
+    lastKeyChoice = (int) apvts.getRawParameterValue ("key")->load();
 
-    pool.addJob ([this, vocal = std::move (vocal), beat = std::move (beat), sr, bpm, ppq, hasSide]
+    pool.addJob ([this, vocal = std::move (vocal), beat = std::move (beat), sr, bpm, ppq, hasSide, forced, fk]
     {
         // seconds from the take start to the first beat line
         double firstBeat = 0.0;
@@ -295,12 +324,12 @@ void SubHarmProcessor::startTakeAnalysis()
         }
         ChordAnalysisResult r;
         if (hasSide)
-            r = analyseChords (beat.data(), (int) beat.size(), sr, bpm, firstBeat);
+            r = analyseChords (beat.data(), (int) beat.size(), sr, bpm, firstBeat, forced ? &fk : nullptr);
         else
         {
             // no chords reachable: key from the vocal itself, harmonies move diatonically
-            auto v = analyseChords (vocal.data(), (int) vocal.size(), sr, bpm, firstBeat);
-            r.key = v.key;
+            auto v = analyseChords (vocal.data(), (int) vocal.size(), sr, bpm, firstBeat, forced ? &fk : nullptr);
+            r.key = forced ? fk : v.key;
             r.chords.push_back ({ 0.0, vocal.size() / sr, Chord {} });
         }
         pendingAnalysis = std::move (r);
@@ -377,13 +406,27 @@ void SubHarmProcessor::removePart (int id)
 StackSettings SubHarmProcessor::currentSettings() const
 {
     StackSettings s;
-    s.size = (StackSize) (int) apvts.getRawParameterValue ("size")->load();
+    s.lines = 0;
+    for (int i = 0; i < kNumLineTypes; ++i)
+        if (apvts.getRawParameterValue ("line" + juce::String (i))->load() > 0.5f) s.lines |= 1u << i;
     s.flavour = (Flavour) (int) apvts.getRawParameterValue ("flavour")->load();
     s.humanize = (Humanize) (int) apvts.getRawParameterValue ("humanize")->load();
     s.crew = (Crew) (int) apvts.getRawParameterValue ("crew")->load();
     s.delivery = (Delivery) (int) apvts.getRawParameterValue ("delivery")->load();
     s.seed = (uint32_t) juce::Random::getSystemRandom().nextInt (1 << 30);
     return s;
+}
+
+void SubHarmProcessor::applyLinePreset (StackSize preset)
+{
+    const auto m = presetLines (preset);
+    for (int i = 0; i < kNumLineTypes; ++i)
+        if (auto* p = apvts.getParameter ("line" + juce::String (i)))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (hasLine (m, (LineType) i) ? 1.0f : 0.0f);
+            p->endChangeGesture();
+        }
 }
 
 int SubHarmProcessor::numPendingParts() const
@@ -401,6 +444,7 @@ int SubHarmProcessor::numPendingParts() const
 void SubHarmProcessor::stackHarmonies()
 {
     if (take.isEmpty() || ! take.analysed) return;
+    if (currentSettings().lines == 0) return;   // no lines ticked
     std::vector<int> targets;
     for (const auto& p : parts)
     {
@@ -545,6 +589,16 @@ void SubHarmProcessor::timerCallback()
     if (getRecState() == RecState::Finished)
         finaliseRecording();
 
+    // Key changed after recording: read the chords again inside the new key
+    const int keyChoice = (int) apvts.getRawParameterValue ("key")->load();
+    if (keyChoice != lastKeyChoice && ! take.isEmpty() && ! analysing.load())
+    {
+        startTakeAnalysis();
+        changed = true;
+    }
+    else if (take.isEmpty())
+        lastKeyChoice = keyChoice;
+
     if (analysisDone.exchange (false))
     {
         take.chords = pendingAnalysis.chords;
@@ -661,28 +715,28 @@ void SubHarmProcessor::buildExportBuffers (bool stems, std::vector<std::vector<f
         return;
     }
 
-    // STEMS: one dry mono track per harmony line, all parts of that line summed
+    // STEMS: one dry mono track per line + side ("3RD UP L"), all parts of that line summed
     chPerFile = 1;
-    int maxVoices = 0;
-    for (const auto& s : stacks)
-        if (s->enabled && s->state.load() == StackEntry::Done)
-            if (auto r = getResult (*s)) maxVoices = std::max (maxVoices, (int) r->voices.size());
-
-    static const char* lineNames[8] = { "High 3rd", "Low 3rd", "Low", "High", "High 3rd dbl", "Low 3rd dbl", "Low dbl", "High dbl" };
-    for (int v = 0; v < maxVoices; ++v)
-    {
-        std::vector<float> m (len, 0.0f);
-        for (const auto& s : stacks)
+    for (int ti = 0; ti < kNumLineTypes; ++ti)
+        for (int side : { -1, 1 })
         {
-            if (! s->enabled || s->state.load() != StackEntry::Done) continue;
-            auto r = getResult (*s); if (r == nullptr || v >= (int) r->voices.size()) continue;
-            const auto& voice = r->voices[(size_t) v];
-            const auto off = (size_t) std::llround (s->partStart * take.sampleRate);
-            for (size_t i = 0; i < voice.audio.size() && off + i < len; ++i) m[off + i] += voice.audio[i] * voice.gain;
+            std::vector<float> m;
+            for (const auto& s : stacks)
+            {
+                if (! s->enabled || s->state.load() != StackEntry::Done) continue;
+                auto r = getResult (*s); if (r == nullptr) continue;
+                for (const auto& voice : r->voices)
+                {
+                    if ((int) voice.type != ti || voice.side != side) continue;
+                    if (m.empty()) m.assign (len, 0.0f);
+                    const auto off = (size_t) std::llround (s->partStart * take.sampleRate);
+                    for (size_t i = 0; i < voice.audio.size() && off + i < len; ++i) m[off + i] += voice.audio[i] * voice.gain;
+                }
+            }
+            if (m.empty()) continue;
+            chans.push_back (std::move (m));
+            names.push_back (juce::String ("SubHarm ") + lineName ((LineType) ti) + (side < 0 ? " L" : " R"));
         }
-        chans.push_back (std::move (m));
-        names.push_back (juce::String ("SubHarm ") + juce::String (v + 1) + " " + lineNames[v % 8]);
-    }
 }
 
 juce::StringArray SubHarmProcessor::exportForDrag (bool stems)
@@ -727,6 +781,7 @@ void SubHarmProcessor::getStateInformation (juce::MemoryBlock& dest)
     song->setAttribute ("length", (int) take.vocal.size());
     song->setAttribute ("hasSidechain", take.hasSidechain);
     song->setAttribute ("analysed", take.analysed);
+    song->setAttribute ("keyForced", take.keyForced);
     song->setAttribute ("keyTonic", take.key.tonic);
     song->setAttribute ("keyMinor", take.key.minor);
     song->setAttribute ("nextPart", nextPartId);
@@ -752,14 +807,14 @@ void SubHarmProcessor::getStateInformation (juce::MemoryBlock& dest)
         auto* e = song->createNewChildElement ("Stack");
         e->setAttribute ("id", s->id); e->setAttribute ("part", s->partId);
         e->setAttribute ("partStart", s->partStart); e->setAttribute ("enabled", s->enabled);
-        e->setAttribute ("size", (int) s->settings.size); e->setAttribute ("flavour", (int) s->settings.flavour);
+        e->setAttribute ("lines", (int) s->settings.lines); e->setAttribute ("flavour", (int) s->settings.flavour);
         e->setAttribute ("humanize", (int) s->settings.humanize); e->setAttribute ("crew", (int) s->settings.crew);
         e->setAttribute ("delivery", (int) s->settings.delivery); e->setAttribute ("seed", (int) s->settings.seed);
         for (const auto& v : r->voices)
         {
             auto* ve = e->createNewChildElement ("Voice");
             ve->setAttribute ("pan", v.pan); ve->setAttribute ("gain", v.gain);
-            ve->setAttribute ("slot", v.slot); ve->setAttribute ("dbl", v.isDouble);
+            ve->setAttribute ("type", (int) v.type); ve->setAttribute ("side", v.side);
         }
     }
     copyXmlToBinary (*xml, dest);
@@ -798,6 +853,8 @@ void SubHarmProcessor::setStateInformation (const void* data, int size)
     take.beatsPerBar = song->getIntAttribute ("beatsPerBar", 4);
     take.hasSidechain = song->getBoolAttribute ("hasSidechain");
     take.analysed = song->getBoolAttribute ("analysed");
+    take.keyForced = song->getBoolAttribute ("keyForced");
+    lastKeyChoice = (int) apvts.getRawParameterValue ("key")->load();
     take.key = { song->getIntAttribute ("keyTonic"), song->getBoolAttribute ("keyMinor") };
     nextPartId = song->getIntAttribute ("nextPart", 1);
     nextStackId = song->getIntAttribute ("nextStack", 1);
@@ -820,7 +877,7 @@ void SubHarmProcessor::setStateInformation (const void* data, int size)
         auto s = std::make_shared<StackEntry>();
         s->id = e->getIntAttribute ("id"); s->partId = e->getIntAttribute ("part");
         s->partStart = e->getDoubleAttribute ("partStart"); s->enabled = e->getBoolAttribute ("enabled", true);
-        s->settings.size = (StackSize) e->getIntAttribute ("size"); s->settings.flavour = (Flavour) e->getIntAttribute ("flavour");
+        s->settings.lines = (uint32_t) e->getIntAttribute ("lines"); s->settings.flavour = (Flavour) e->getIntAttribute ("flavour");
         s->settings.humanize = (Humanize) e->getIntAttribute ("humanize"); s->settings.crew = (Crew) e->getIntAttribute ("crew");
         s->settings.delivery = (Delivery) e->getIntAttribute ("delivery"); s->settings.seed = (uint32_t) e->getIntAttribute ("seed");
 
@@ -831,7 +888,7 @@ void SubHarmProcessor::setStateInformation (const void* data, int size)
         {
             RenderedVoice v;
             v.pan = (float) ve->getDoubleAttribute ("pan"); v.gain = (float) ve->getDoubleAttribute ("gain", 0.5);
-            v.slot = ve->getIntAttribute ("slot"); v.isDouble = ve->getBoolAttribute ("dbl");
+            v.type = (LineType) ve->getIntAttribute ("type"); v.side = ve->getIntAttribute ("side", -1);
             ok &= readMonoWav (dir.getChildFile ("stacks").getChildFile ("stack" + juce::String (s->id) + "_v" + juce::String (vi) + ".wav"), v.audio);
             r->voices.push_back (std::move (v));
             ++vi;

@@ -112,145 +112,155 @@ namespace
         auto iv = c.intervals();
         for (size_t i = 0; i < iv.size(); ++i)
         {
-            bool isSeventh = (i == 3);
-            if (f == Flavour::Clean && isSeventh) continue;   // clean = plain triads
+            if (f == Flavour::Clean && i == 3) continue;   // clean = plain triads
             add (iv[i], false);
         }
-
         const bool minorish = c.quality == Quality::Min || c.quality == Quality::Min7;
         const bool majorish = c.quality == Quality::Maj || c.quality == Quality::Maj7 || c.quality == Quality::Dom7;
-
         switch (f)
         {
             case Flavour::Clean: break;
             case Flavour::Pop:
-                if (majorish || minorish || c.quality == Quality::Sus4) add (2, true);       // add9
+                if (majorish || minorish || c.quality == Quality::Sus4) add (2, true);
                 break;
             case Flavour::RnB:
-                if (c.quality == Quality::Maj) add (11, true);                               // maj7
-                if (c.quality == Quality::Min || c.quality == Quality::Sus4) add (10, true); // m7 / 7sus
-                if (c.quality != Quality::Dim) add (2, true);                                // 9
+                if (c.quality == Quality::Maj) add (11, true);
+                if (c.quality == Quality::Min || c.quality == Quality::Sus4) add (10, true);
+                if (c.quality != Quality::Dim) add (2, true);
                 break;
             case Flavour::Gospel:
                 if (c.quality == Quality::Maj) add (11, true);
                 if (c.quality == Quality::Min || c.quality == Quality::Sus4) add (10, true);
-                if (c.quality != Quality::Dim) add (2, true);                                // 9
-                if (majorish) add (9, true);                                                 // 13
-                if (minorish) add (5, true);                                                 // 11
+                if (c.quality != Quality::Dim) add (2, true);
+                if (majorish) add (9, true);
+                if (minorish) add (5, true);
                 break;
         }
         return s;
     }
 
-    // Target interval (semitones from lead) for each line of the stack, in priority order.
-    const int kSlotTarget[4]   = { +4, -4, -8, +8 };
-    // Same lines expressed as diatonic steps, used for passing tones / no chord.
-    const int kSlotDegrees[4]  = { +2, -2, -5, +4 };
-
-    int diatonicShift (int leadMidi, int degrees, const Key& key)
+    // Scale pitches around the lead, used for diatonic intervals.
+    struct ScaleLadder
     {
-        auto scale = key.scalePitchClasses();
         std::vector<int> pitches;
-        for (int m = leadMidi - 30; m <= leadMidi + 30; ++m)
-            if (std::find (scale.begin(), scale.end(), ((m % 12) + 12) % 12) != scale.end())
-                pitches.push_back (m);
-        // nearest scale pitch at or below the lead
-        int idx = 0;
-        for (int i = 0; i < (int) pitches.size(); ++i) if (pitches[i] <= leadMidi) idx = i;
-        int t = std::clamp (idx + degrees, 0, (int) pitches.size() - 1);
-        return pitches[t] - leadMidi;
-    }
+        ScaleLadder (int lead, const Key& key)
+        {
+            for (int m = lead - 36; m <= lead + 36; ++m)
+                if (key.contains (m)) pitches.push_back (m);
+        }
+        // index of the scale pitch nearest to m (ties go down)
+        int indexOf (int m) const
+        {
+            int best = 0;
+            for (int i = 0; i < (int) pitches.size(); ++i)
+                if (std::abs (pitches[i] - m) < std::abs (pitches[best] - m)) best = i;
+            return best;
+        }
+        int shift (int lead, int steps) const   // semitones from lead to the pitch 'steps' scale steps away
+        {
+            int t = std::clamp (indexOf (lead) + steps, 0, (int) pitches.size() - 1);
+            return pitches[t] - lead;
+        }
+        int stepsBetween (int lead, int p) const { return indexOf (p) - indexOf (lead); }
+    };
 }
 
 std::vector<VoiceLine> generateHarmony (const std::vector<NoteSeg>& notes, const std::vector<ChordSeg>& chords,
                                         double partOffset, const Key& key, const StackSettings& st)
 {
-    const int L = numDistinctLines (st.size);
-    std::vector<VoiceLine> lines (L);
-    for (int v = 0; v < L; ++v) { lines[v].slot = v; lines[v].semis.assign (notes.size(), 0); }
-
+    const uint32_t mask = st.lines != 0 ? st.lines : presetLines (StackSize::Full);
     const bool gospel = st.flavour == Flavour::Gospel;
     const bool rnb = st.flavour == Flavour::RnB;
     const double extBonus = gospel ? 0.9 : rnb ? 0.55 : st.flavour == Flavour::Pop ? 0.15 : 0.0;
-    const double leadSemiClash = gospel ? 1.2 : 3.0;
-    const double leadToneClash = gospel ? 0.15 : rnb ? 0.4 : 0.8;
-    const double voiceSemiClash = gospel ? 0.9 : 2.5;
+    const double leadSemiClash = gospel ? 1.5 : 3.0;
 
-    std::vector<int> prevPitch (L, std::numeric_limits<int>::min());
-    double prevEnd = -10.0;
-
-    for (size_t ni = 0; ni < notes.size(); ++ni)
+    std::vector<VoiceLine> lines;
+    for (int ti = 0; ti < kNumLineTypes; ++ti)
     {
-        const auto& n = notes[ni];
-        const int lead = n.midi;
-        const int leadPc = ((lead % 12) + 12) % 12;
-        const double mid = partOffset + 0.5 * (n.start + n.end);
-        const ChordSeg* cs = chordAt (chords, mid);
-        const bool connected = (n.start - prevEnd) < 0.5;
+        const auto type = (LineType) ti;
+        if (! hasLine (mask, type)) continue;
 
-        bool useDiatonic = (cs == nullptr || cs->chord.isNoChord());
-        PcSet set;
-        if (! useDiatonic)
-        {
-            set = chordSet (cs->chord, st.flavour);
-            // Lead on a tone outside the chord colour (passing / suspension) -> move in parallel diatonically
-            if (! set.allowed[leadPc])
-                useDiatonic = true;
-        }
+        VoiceLine line;
+        line.type = type;
+        line.semis.assign (notes.size(), 0);
 
-        std::vector<int> chosen;
-        for (int v = 0; v < L; ++v)
+        int prevPitch = std::numeric_limits<int>::min();
+        int prevSteps = std::numeric_limits<int>::min();
+        double prevEnd = -10.0;
+
+        for (size_t ni = 0; ni < notes.size(); ++ni)
         {
-            int best = 0;
-            if (useDiatonic)
+            const auto& n = notes[ni];
+            const int lead = n.midi;
+            const bool connected = (n.start - prevEnd) < 0.5;
+
+            // Very short blips (glides, ornaments, tracking hiccups) keep the previous
+            // interval instead of getting a decision of their own: no jumps.
+            if (ni > 0 && connected && (n.end - n.start) < 0.07
+                && (type == LineType::Unison || type == LineType::OctaveUp || type == LineType::OctaveDown
+                    || ! key.contains (notes[ni - 1].midi) || key.contains (lead + line.semis[ni - 1])))
             {
-                best = lead + diatonicShift (lead, kSlotDegrees[v], key);
-                if (std::find (chosen.begin(), chosen.end(), best) != chosen.end())
-                    best = lead + diatonicShift (lead, kSlotDegrees[v] + (kSlotDegrees[v] > 0 ? 1 : -1), key);
+                line.semis[ni] = line.semis[ni - 1];
+                prevEnd = n.end;
+                continue;
             }
-            else
+
+            const ScaleLadder ladder (lead, key);
+            int semis = 0;
+            switch (type)
             {
-                const int target = lead + kSlotTarget[v];
-                double bestCost = std::numeric_limits<double>::max();
-                for (int pass = 0; pass < 2 && bestCost == std::numeric_limits<double>::max(); ++pass)
+                case LineType::Unison:     semis = 0; break;
+                case LineType::OctaveUp:   semis = 12; break;
+                case LineType::OctaveDown: semis = -12; break;
+                case LineType::ThirdUp:    semis = ladder.shift (lead, +2); break;
+                case LineType::ThirdDown:  semis = ladder.shift (lead, -2); break;
+                case LineType::FifthUp:    semis = ladder.shift (lead, +4); break;
+                case LineType::FifthDown:  semis = ladder.shift (lead, -4); break;
+                case LineType::ChordHigh:
+                case LineType::ChordLow:
                 {
-                    for (int p = lead - 15; p <= lead + 10; ++p)
+                    const int dir = type == LineType::ChordHigh ? 1 : -1;
+                    const int target = lead + ladder.shift (lead, dir * 2);
+                    const ChordSeg* cs = chordAt (chords, partOffset + 0.5 * (n.start + n.end));
+                    PcSet set;
+                    bool useChord = cs != nullptr && ! cs->chord.isNoChord();
+                    if (useChord) set = chordSet (cs->chord, st.flavour);
+                    if (useChord && ! set.allowed[((lead % 12) + 12) % 12] && (n.end - n.start) < 0.25)
+                        useChord = false;   // short passing tone in the lead: move in parallel
+
+                    int best = target;
+                    if (useChord)
                     {
-                        int pc = ((p % 12) + 12) % 12;
-                        if (! set.allowed[pc] || p == lead) continue;
-                        if (pass == 0 && ((kSlotTarget[v] > 0) != (p > lead))) continue;  // keep line on its side
-                        if (std::find (chosen.begin(), chosen.end(), p) != chosen.end()) continue;
-
-                        double c = std::abs (p - target);
-                        if (connected && prevPitch[v] != std::numeric_limits<int>::min())
-                            c += 0.6 * std::abs (p - prevPitch[v]);
-                        int d = std::abs (p - lead) % 12;
-                        if (d == 1 || d == 11) c += leadSemiClash;
-                        if (std::abs (p - lead) == 2) c += leadToneClash;
-                        if (std::abs (p - lead) == 12) c += 2.0;
-                        for (int o : chosen)
-                            if (std::abs (o - p) == 1) c += voiceSemiClash;
-                        if (set.extension[pc]) c -= extBonus;
-                        if (c < bestCost) { bestCost = c; best = p; }
+                        double bestCost = std::numeric_limits<double>::max();
+                        for (int p = lead + dir; dir > 0 ? p <= lead + 9 : p >= lead - 9; p += dir)
+                        {
+                            const int pc = ((p % 12) + 12) % 12;
+                            if (! set.allowed[pc] || ! key.contains (pc)) continue;   // never leave the key
+                            double c = 0.8 * std::abs (p - target);
+                            if (connected && prevPitch != std::numeric_limits<int>::min())
+                                c += 0.5 * std::abs (p - prevPitch);
+                            if (connected && prevSteps != std::numeric_limits<int>::min()
+                                && p == lead + ladder.shift (lead, prevSteps))
+                                c -= 0.8;                                             // keep moving in parallel
+                            const int d = std::abs (p - lead);
+                            if (d == 1) c += leadSemiClash;
+                            if (d == 2) c += gospel ? 0.6 : 1.6;   // a 2nd against the lead sounds wrong outside gospel
+                            if (set.extension[pc]) c -= extBonus;
+                            if (c < bestCost) { bestCost = c; best = p; }
+                        }
                     }
+                    semis = best - lead;
+                    prevSteps = ladder.stepsBetween (lead, best);
+                    break;
                 }
-                if (bestCost == std::numeric_limits<double>::max())
-                    best = lead + diatonicShift (lead, kSlotDegrees[v], key);
+                default: break;
             }
-            chosen.push_back (best);
-            lines[v].semis[ni] = best - lead;
-            prevPitch[v] = best;
+            line.semis[ni] = semis;
+            prevPitch = lead + semis;
+            prevEnd = n.end;
         }
-        prevEnd = n.end;
+        lines.push_back (std::move (line));
     }
-
-    if (st.size == StackSize::Full)
-        for (int v = 0; v < L; ++v)
-        {
-            VoiceLine d = lines[v];
-            d.doubleOf = v;
-            lines.push_back (d);
-        }
     return lines;
 }
 

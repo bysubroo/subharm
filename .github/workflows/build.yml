@@ -60,6 +60,20 @@ jobs:
           Copy-Item installer/windows/Install-SubHarm.bat dist/
           Copy-Item installer/windows/Install-SubHarm.ps1 dist/
           Copy-Item README.md dist/
+      - name: Build .exe installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          $ver = (Select-String -Path CMakeLists.txt -Pattern 'project \(SubHarm VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force -Path installer-out | Out-Null
+          & $iscc "/DAppVersion=$ver" "/DSrcDir=$pwd\build\src\plugin\SubHarm_artefacts\Release\VST3\SubHarm.vst3" "/O$pwd\installer-out" installer\windows\SubHarm.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem installer-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubHarm-Windows-Installer
+          path: installer-out/*.exe
       - uses: actions/upload-artifact@v4
         with:
           name: SubHarm-Windows-VST3
@@ -106,5 +120,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
+            artifacts/SubHarm-Windows-Installer/*.exe
             SubHarm-Windows.zip
             artifacts/SubHarm-macOS/SubHarm-macOS.zip

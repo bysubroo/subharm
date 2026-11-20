@@ -11,6 +11,7 @@ Segment::Segment (juce::RangedAudioParameter& p, juce::StringArray labels) : par
     {
         auto* b = buttons.add (new juce::TextButton (labels[i]));
         b->setClickingTogglesState (false);
+        b->getProperties().set ("lamp", true);
         b->onClick = [this, i]
         {
             param.beginChangeGesture();
@@ -40,19 +41,25 @@ void Segment::update()
 // =====================================================================================
 void DragTile::paint (juce::Graphics& g)
 {
-    auto r = getLocalBounds().toFloat().reduced (1.0f);
     bool any = false;
     for (const auto& s : proc.getStacks()) any |= s->enabled && s->state.load() == StackEntry::Done;
-    g.setColour (any ? panelHi : panel);
-    g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (any ? accent : line);
-    g.drawRoundedRectangle (r, 8.0f, 1.5f);
-    g.setColour (any ? text : faint);
-    g.setFont (font (16.0f, true));
-    g.drawText (isStems ? "STEMS" : "MIX", r.withTrimmedBottom (r.getHeight() * 0.45f), juce::Justification::centredBottom);
-    g.setColour (dim);
-    g.setFont (font (10.0f));
-    g.drawText (isStems ? "a track per line" : "one track", r.withTrimmedTop (r.getHeight() * 0.6f).reduced (4, 0), juce::Justification::centredTop);
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.fillRoundedRectangle (r.translated (0, 2.0f), 6.0f);
+    auto face = r.withTrimmedBottom (2.0f);
+    const auto base = any ? panelHi : panelHi.darker (0.4f);
+    g.setGradientFill (juce::ColourGradient (base.brighter (0.15f), 0, face.getY(), base.darker (0.3f), 0, face.getBottom(), false));
+    g.fillRoundedRectangle (face, 6.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.8f));
+    g.drawRoundedRectangle (face, 6.0f, 1.0f);
+    // grip lines
+    g.setColour (juce::Colours::black.withAlpha (0.35f));
+    for (int i = 0; i < 3; ++i) g.drawHorizontalLine ((int) face.getBottom() - 10 - i * 4, face.getCentreX() - 14, face.getCentreX() + 14);
+    lamp (g, { face.getX() + 12.0f, face.getY() + 12.0f }, 3.5f, accent, any);
+    engrave (g, isStems ? "STEMS" : "MIX", face.withTrimmedBottom (face.getHeight() * 0.42f).toNearestInt(),
+             juce::Justification::centredBottom, any ? text : faint, 16.0f);
+    engrave (g, isStems ? "line by line" : "one track", face.withTrimmedTop (face.getHeight() * 0.58f).withTrimmedBottom (16).toNearestInt(),
+             juce::Justification::centredTop, dim, 9.0f, false);
 }
 
 void DragTile::mouseDrag (const juce::MouseEvent& e)
@@ -80,24 +87,14 @@ void StacksList::paint (juce::Graphics& g)
     for (const auto& s : stacks)
     {
         auto row = juce::Rectangle<int> (0, y, getWidth(), kRow - 4);
-        g.setColour (panelHi);
-        g.fillRoundedRectangle (row.toFloat(), 6.0f);
+        recess (g, row.toFloat().reduced (0.5f), 4.0f, bg);
 
         int colour = 0;
         for (const auto& p : proc.getParts()) if (p.id == s->partId) colour = p.colourIndex;
         const bool done = s->state.load() == StackEntry::Done;
 
         // tick box
-        auto box = juce::Rectangle<float> (10.0f, (float) y + (kRow - 4) / 2.0f - 8.0f, 16.0f, 16.0f);
-        g.setColour (s->enabled && done ? accent : line);
-        if (s->enabled && done) g.fillRoundedRectangle (box, 3.0f);
-        else g.drawRoundedRectangle (box, 3.0f, 1.5f);
-        if (s->enabled && done)
-        {
-            g.setColour (juce::Colours::white);
-            juce::Path tick; tick.startNewSubPath (box.getX() + 3.5f, box.getCentreY()); tick.lineTo (box.getX() + 7.0f, box.getBottom() - 4.0f); tick.lineTo (box.getRight() - 3.0f, box.getY() + 4.0f);
-            g.strokePath (tick, juce::PathStrokeType (2.0f));
-        }
+        lamp (g, { 18.0f, (float) y + (kRow - 4) / 2.0f }, 5.0f, accent, s->enabled && done);
 
         // part badge
         auto badge = juce::Rectangle<float> (34.0f, (float) y + 8.0f, 24.0f, (float) kRow - 20.0f);
@@ -107,7 +104,7 @@ void StacksList::paint (juce::Graphics& g)
         g.setFont (font (12.0f, true));
         g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + (s->partId - 1) % 26)), badge, juce::Justification::centred);
 
-        g.setColour (text);
+        g.setColour (accent.brighter (0.4f));
         g.setFont (font (12.0f, true));
         g.drawText (juce::String (numLines (s->settings.lines) * 2) + " voices" + juce::String::fromUTF8 (" · ") + toString (s->settings.flavour)
                         + juce::String::fromUTF8 (" · ") + toString (s->settings.crew) + juce::String::fromUTF8 (" · ") + toString (s->settings.delivery)
@@ -161,6 +158,7 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
 {
     setLookAndFeel (&lnf);
 
+    recordButton.setComponentID ("rec");
     recordButton.onClick = [this] { proc.toggleRecord(); refresh(); };
     addAndMakeVisible (recordButton);
     zoomOut.onClick = [this] { timeline.zoom (0.7); };
@@ -176,7 +174,7 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     keyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "key", keyBox);
 
     static const char* shortNames[kNumLineTypes] = { "UNIS", "3RD UP", "3RD DOWN", "5TH UP", "5TH DOWN",
-                                                    "OCT UP", "OCT DOWN", "CHORD HIGH", "CHORD LOW" };
+                                                    "OCT UP", "OCT DOWN", "CHORD HI", "CHORD LO" };
     for (int i = 0; i < kNumLineTypes; ++i)
     {
         auto* b = lineButtons.add (new juce::TextButton (shortNames[i]));
@@ -190,7 +188,7 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     {
         auto* b = presetButtons.add (new juce::TextButton (presetNames[i]));
         b->onClick = [this, i] { proc.applyLinePreset ((StackSize) i); };
-        b->setColour (juce::TextButton::buttonColourId, panel.brighter (0.04f));
+        b->setColour (juce::TextButton::buttonColourId, panelHi.darker (0.15f));
         addAndMakeVisible (b);
     }
 
@@ -248,8 +246,8 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
 
     proc.addChangeListener (this);
     setResizable (true, true);
-    setResizeLimits (1000, 820, 2200, 1500);
-    setSize (1120, 860);
+    setResizeLimits (1060, 840, 2200, 1500);
+    setSize (1180, 880);
     refresh();
     startTimerHz (30);
 }
@@ -262,104 +260,109 @@ SubHarmEditor::~SubHarmEditor()
 
 void SubHarmEditor::drawCard (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& num, const juce::String& title)
 {
-    g.setColour (panel);
-    g.fillRoundedRectangle (r.toFloat(), 10.0f);
-    g.setColour (line);
-    g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 10.0f, 1.0f);
-    auto badge = juce::Rectangle<float> ((float) r.getX() + 14, (float) r.getY() + 12, 20, 20);
-    g.setColour (accent);
-    g.fillEllipse (badge);
-    g.setColour (juce::Colours::white);
-    g.setFont (font (11.0f, true));
-    g.drawText (num, badge, juce::Justification::centred);
-    g.setColour (text);
-    g.setFont (font (12.0f, true));
-    g.drawText (title, r.getX() + 42, r.getY() + 12, r.getWidth() - 60, 20, juce::Justification::centredLeft);
+    // a recessed module on the faceplate, with its number stamped in a ring
+    recess (g, r.toFloat(), 6.0f, juce::Colours::black.withAlpha (0.18f));
+    auto ring = juce::Rectangle<float> ((float) r.getX() + 12, (float) r.getY() + 11, 20, 20);
+    g.setColour (juce::Colours::black.withAlpha (0.5f));
+    g.drawEllipse (ring.translated (0, 1), 1.4f);
+    g.setColour (dim);
+    g.drawEllipse (ring, 1.4f);
+    engrave (g, num, ring.toNearestInt(), juce::Justification::centred, text, 10.5f);
+    engrave (g, title, { r.getX() + 40, r.getY() + 11, r.getWidth() - 60, 20 }, juce::Justification::centredLeft, text, 11.5f);
 }
 
 void SubHarmEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (bg);
+    if (faceplate.getWidth() != getWidth() || faceplate.getHeight() != getHeight())
+        faceplate = makeFaceplate (getWidth(), getHeight(), kEar);
+    g.drawImageAt (faceplate, 0, 0);
 
-    // header
-    g.setColour (text);
-    g.setFont (font (24.0f, true));
-    g.drawText ("SUBHARM", headerArea.getX(), headerArea.getY(), 150, headerArea.getHeight(), juce::Justification::centredLeft);
-    g.setColour (accent);
-    g.fillRect (headerArea.getX() + 2, headerArea.getBottom() - 10, 26, 3);
-    g.setColour (dim);
-    g.setFont (font (11.0f));
-    g.drawText (juce::String::fromUTF8 ("stacks that know the song  ·  by SubRoo"), headerArea.getX() + 140, headerArea.getY(), 260, headerArea.getHeight(), juce::Justification::centredLeft);
-
-    const auto& take = proc.getTake();
-    juce::String info;
-    if (! take.isEmpty())
+    // ---- header: name badge ----
     {
-        info = take.analysed ? juce::String (take.key.name()) + (take.keyForced ? "" : " (auto)") : juce::String ("...");
-        if (take.bpm > 0) info << juce::String::fromUTF8 ("  ·  ") << juce::String (take.bpm, 1) << " BPM";
-        const int secs = (int) take.lengthSeconds();
-        info << juce::String::fromUTF8 ("  ·  ") << secs / 60 << ":" << juce::String (secs % 60).paddedLeft ('0', 2);
+        auto logo = juce::Rectangle<int> (headerArea.getX(), headerArea.getY() + 2, 250, headerArea.getHeight() - 4);
+        g.setFont (font (27.0f, true).withExtraKerningFactor (0.06f));
+        g.setColour (juce::Colours::black.withAlpha (0.6f));
+        g.drawText ("SubHarm", logo.withHeight (30).translated (0, 1), juce::Justification::centredLeft);
+        g.setColour (text);
+        g.drawText ("SubHarm", logo.withHeight (30), juce::Justification::centredLeft);
+        engrave (g, "VOCAL HARMONY STACKER", { logo.getX() + 1, logo.getY() + 30, 240, 14 }, juce::Justification::centredLeft, dim, 9.0f);
+        engrave (g, "SH-2  |  SubRoo", { logo.getX() + 150, logo.getY() + 8, 120, 14 }, juce::Justification::centredLeft, accent, 9.0f);
     }
-    g.setColour (text);
-    g.setFont (font (13.0f, true));
-    g.drawText (info, ledArea.getRight() + 22, headerArea.getY(), 260, headerArea.getHeight(), juce::Justification::centredLeft);
 
-    // side chain LED
-    const bool sig = proc.getSidechainLevel() > 0.003f;
-    g.setColour (sig ? green : (proc.isSidechainConnected() ? faint : accentDim));
-    g.fillEllipse (ledArea.toFloat());
-    g.setColour (dim);
-    g.setFont (font (10.0f));
-    g.drawText ("SIDE CHAIN", ledArea.getX() - 68, ledArea.getY() - 3, 64, ledArea.getHeight() + 6, juce::Justification::centredRight);
+    // ---- header: song display (key / tempo / length) ----
+    {
+        recess (g, songDisplay.toFloat(), 4.0f, bg);
+        const auto& take = proc.getTake();
+        auto d = songDisplay.reduced (10, 4);
+        auto cell = [&] (const char* label, const juce::String& value, int w)
+        {
+            auto c = d.removeFromLeft (w);
+            g.setColour (faint);
+            g.setFont (font (8.5f, true).withExtraKerningFactor (0.1f));
+            g.drawText (label, c.removeFromTop (12), juce::Justification::centredLeft);
+            g.setColour (accent.brighter (0.4f));
+            g.setFont (font (15.0f, true));
+            g.drawText (value, c, juce::Justification::centredLeft);
+        };
+        juce::String key = "--", bpm = "--", len = "--:--";
+        if (! take.isEmpty())
+        {
+            if (take.analysed) key = juce::String (take.key.name()) + (take.keyForced ? "" : " A");
+            else key = "...";
+            if (take.bpm > 0) bpm = juce::String (take.bpm, 1);
+            const int secs = (int) take.lengthSeconds();
+            len = juce::String (secs / 60) + ":" + juce::String (secs % 60).paddedLeft ('0', 2);
+        }
+        cell (take.keyForced ? "KEY (SET)" : "KEY (AUTO)", key, juce::jmax (90, d.getWidth() / 2));
+        cell ("BPM", bpm, d.getWidth() / 2);
+        cell ("TAKE", len, d.getWidth());
+    }
+
+    // ---- header: side chain VU ----
+    drawVu (g, vuArea.toFloat(), vuNeedle, proc.isSidechainConnected());
 
     drawCard (g, partsCard, "1", "PICK YOUR PARTS");
-    g.setColour (faint);
-    g.setFont (font (10.5f));
-    g.drawText (juce::String::fromUTF8 ("Drag on the vocal to add a part  ·  drag edges to resize (Alt = no snap)  ·  click a chord to fix it  ·  Ctrl+wheel zoom"),
-                partsCard.getX() + 200, partsCard.getY() + 12, partsCard.getWidth() - 420, 20, juce::Justification::centredLeft);
+    engrave (g, juce::String::fromUTF8 ("drag on the vocal = new part  ·  drag edges = resize (Alt: free)  ·  click a chord to fix it  ·  Ctrl+wheel = zoom"),
+             { partsCard.getX() + 200, partsCard.getY() + 12, partsCard.getWidth() - 360, 20 }, juce::Justification::centredLeft, faint, 9.5f, false);
     drawCard (g, voicesCard, "2", "CHOOSE YOUR VOICES");
     drawCard (g, singCard, "3", "HOW THEY SING");
-    g.setColour (dim);
-    g.setFont (font (10.0f, true));
-    auto lbl = [&] (juce::Component& c, const char* t) { g.drawText (t, singCard.getX() + 16, c.getY(), 80, c.getHeight(), juce::Justification::centredLeft); };
-    lbl (flavourSeg, "FLAVOUR"); lbl (humanizeSeg, "HUMANIZE");
+    auto lbl = [&] (juce::Rectangle<int> r, const char* t) { engrave (g, t, r, juce::Justification::centredLeft, dim, 9.5f); };
+    lbl ({ singCard.getX() + 16, flavourSeg.getY(), 80, flavourSeg.getHeight() }, "FLAVOUR");
+    lbl ({ singCard.getX() + 16, humanizeSeg.getY(), 80, humanizeSeg.getHeight() }, "HUMANIZE");
     if (! lineButtons.isEmpty())
     {
-        g.drawText ("LINES", singCard.getX() + 16, lineButtons[0]->getY(), 80, lineButtons[0]->getHeight(), juce::Justification::centredLeft);
-        g.drawText ("PRESET", singCard.getX() + 16, presetButtons[0]->getY(), 80, presetButtons[0]->getHeight(), juce::Justification::centredLeft);
-        g.setColour (faint);
-        g.setFont (font (9.5f));
-        g.drawText ("every line = L + R take", presetButtons[2]->getRight() + 10,
-                    presetButtons[0]->getY(), singCard.getRight() - presetButtons[2]->getRight() - 24, presetButtons[0]->getHeight(),
-                    juce::Justification::centredLeft);
-        g.setColour (dim);
-        g.setFont (font (10.0f, true));
+        lbl ({ singCard.getX() + 16, lineButtons[0]->getY(), 80, lineButtons[0]->getHeight() }, "LINES");
+        lbl ({ singCard.getX() + 16, presetButtons[0]->getY(), 80, presetButtons[0]->getHeight() }, "PRESET");
+        engrave (g, "each line = L + R take", { presetButtons[2]->getRight() + 10, presetButtons[0]->getY(),
+                 singCard.getRight() - presetButtons[2]->getRight() - 24, presetButtons[0]->getHeight() },
+                 juce::Justification::centredLeft, faint, 9.0f, false);
     }
-    g.drawText ("KEY", keyBox.getX(), keyBox.getY() - 16, 120, 14, juce::Justification::centredLeft);
-    g.drawText ("VOICES", crewBox.getX(), crewBox.getY() - 16, 120, 14, juce::Justification::centredLeft);
-    g.drawText ("DELIVERY", deliveryBox.getX(), deliveryBox.getY() - 16, 120, 14, juce::Justification::centredLeft);
+    lbl ({ keyBox.getX(), keyBox.getY() - 16, 120, 14 }, "KEY");
+    lbl ({ crewBox.getX(), crewBox.getY() - 16, 120, 14 }, "VOICES");
+    lbl ({ deliveryBox.getX(), deliveryBox.getY() - 16, 120, 14 }, "DELIVERY");
     drawCard (g, stackCard, "4", "STACK HARMONIES");
     drawCard (g, stacksCard, "5", "YOUR STACKS");
-    g.setColour (dim);
-    g.setFont (font (10.0f, true));
-    g.drawText ("SAUCE", sauceKnob.getX(), sauceKnob.getY() - 14, sauceKnob.getWidth(), 14, juce::Justification::centred);
-    g.drawText ("LEVEL", levelKnob.getX(), levelKnob.getY() - 14, levelKnob.getWidth(), 14, juce::Justification::centred);
-    g.setColour (faint);
-    g.drawText ("DRAG TO YOUR DAW", mixTile.getX(), mixTile.getY() - 16, 160, 14, juce::Justification::centredLeft);
+    engrave (g, "SAUCE", { sauceKnob.getX(), sauceKnob.getY() - 14, sauceKnob.getWidth(), 14 }, juce::Justification::centred, dim, 9.5f);
+    engrave (g, "LEVEL", { levelKnob.getX(), levelKnob.getY() - 14, levelKnob.getWidth(), 14 }, juce::Justification::centred, dim, 9.5f);
+    engrave (g, "DRAG TO YOUR DAW", { mixTile.getX(), mixTile.getY() - 16, 200, 14 }, juce::Justification::centredLeft, faint, 9.0f);
 }
 
 void SubHarmEditor::resized()
 {
-    auto r = getLocalBounds().reduced (14);
-    headerArea = r.removeFromTop (44);
+    auto r = getLocalBounds().reduced (kEar + 12, 12);
+    headerArea = r.removeFromTop (54);
     {
         auto h = headerArea;
-        h.removeFromLeft (420);
-        recordButton.setBounds (h.removeFromLeft (190).reduced (0, 6));
-        leadThru.setBounds (h.removeFromRight (110).reduced (0, 8));
-        ledArea = { recordButton.getRight() + 82, recordButton.getBounds().getCentreY() - 5, 10, 10 };
+        h.removeFromLeft (290);
+        recordButton.setBounds (h.removeFromLeft (200).withSizeKeepingCentre (200, 40));
+        h.removeFromLeft (14);
+        leadThru.setBounds (h.removeFromRight (110).withSizeKeepingCentre (110, 30));
+        h.removeFromRight (12);
+        vuArea = h.removeFromRight (120);
+        h.removeFromRight (14);
+        songDisplay = h.withSizeKeepingCentre (h.getWidth(), 44);
     }
-    r.removeFromTop (8);
+    r.removeFromTop (10);
 
     partsCard = r.removeFromTop ((int) (r.getHeight() * 0.40f));
     timeline.setBounds (partsCard.reduced (12).withTrimmedTop (30));
@@ -404,7 +407,7 @@ void SubHarmEditor::resized()
         for (int rowIdx = 0; rowIdx < 2; ++rowIdx)
         {
             auto row = c.removeFromTop (rowH);
-            row.removeFromLeft (84);
+            row.removeFromLeft (74);
             const int first = rowIdx == 0 ? 0 : 5, count = rowIdx == 0 ? 5 : 4;
             const int bw = row.getWidth() / 5;
             for (int i = 0; i < count; ++i) lineButtons[first + i]->setBounds (row.removeFromLeft (bw).reduced (2, 0));
@@ -473,7 +476,7 @@ void SubHarmEditor::refresh()
     stacksList.repaint();
     mixTile.repaint();
     stemsTile.repaint();
-    repaint (headerArea);
+    repaint (songDisplay);
 }
 
 void SubHarmEditor::changeListenerCallback (juce::ChangeBroadcaster*)
@@ -488,7 +491,11 @@ void SubHarmEditor::timerCallback()
     flavourSeg.update(); humanizeSeg.update();
     if (proc.getRecState() != SubHarmProcessor::RecState::Idle || ++slowTick % 10 == 0) refresh();
     timeline.followPlayhead();
-    repaint (ledArea.expanded (4));
+    // VU ballistics: ~300 ms rise/fall like a real meter; 0 VU ~ -18 dBFS RMS
+    const float db = juce::Decibels::gainToDecibels (proc.getSidechainLevel(), -60.0f);
+    const float target = juce::jlimit (0.0f, 1.05f, (db + 38.0f) / 23.0f);
+    vuNeedle += (target - vuNeedle) * 0.25f;
+    repaint (vuArea.expanded (2));
 }
 
 } // namespace subharm

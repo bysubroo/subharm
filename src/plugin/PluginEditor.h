@@ -86,6 +86,10 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
 
     int slowTick = 0;
+    static constexpr int kEar = 26;
+    juce::Image faceplate;
+    float vuNeedle = 0.0f;
+    juce::Rectangle<int> vuArea, songDisplay;
     juce::Rectangle<int> headerArea, partsCard, voicesCard, singCard, stackCard, stacksCard, ledArea, linesArea;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SubHarmEditor)

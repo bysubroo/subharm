@@ -72,22 +72,22 @@ void TimelineView::paint (juce::Graphics& g)
 {
     using namespace theme;
     const auto& take = proc.getTake();
-    g.fillAll (panel);
+    recess (g, getLocalBounds().toFloat().reduced (0.5f), 5.0f, panel);
 
     auto label = [&] (juce::Rectangle<int> r, const char* t)
     {
-        g.setColour (dim);
-        g.setFont (font (10.0f, true));
-        g.drawText (t, 6, r.getY(), (int) laneX() - 10, r.getHeight(), juce::Justification::centredLeft);
+        g.setColour (faint);
+        g.setFont (font (9.0f, true).withExtraKerningFactor (0.1f));
+        g.drawText (t, 8, r.getY(), (int) laneX() - 12, r.getHeight(), juce::Justification::centredLeft);
     };
-    label (vocalArea(), "YOUR VOCAL");
+    label (vocalArea(), "VOCAL");
     label (beatArea(), "BEAT");
     label (chordArea(), "CHORDS");
 
     for (auto r : { vocalArea(), beatArea(), chordArea() })
     {
-        g.setColour (bg.brighter (0.03f));
-        g.fillRoundedRectangle (r.toFloat(), 4.0f);
+        g.setColour (bg);
+        g.fillRoundedRectangle (r.toFloat(), 3.0f);
     }
 
     if (take.isEmpty())
@@ -138,7 +138,7 @@ void TimelineView::paint (juce::Graphics& g)
     }
 
     // ---- waves ----
-    drawWave (g, vocalArea().reduced (0, 6), take.vocalPeaks, wave);
+    drawWave (g, vocalArea().reduced (0, 8), take.vocalPeaks, wave.withAlpha (0.85f));
     if (take.hasSidechain) drawWave (g, beatArea().reduced (0, 4), take.beatPeaks, faint);
     else
     {
@@ -199,7 +199,7 @@ void TimelineView::paint (juce::Graphics& g)
         const float x0 = timeToX (c.start), x1 = timeToX (c.end);
         if (x1 < ca.getX() || x0 > ca.getRight()) continue;
         auto r = juce::Rectangle<float> (x0 + 1, (float) ca.getY() + 2, x1 - x0 - 2, (float) ca.getHeight() - 4);
-        g.setColour (c.chord.isNoChord() ? panelHi : panelHi.brighter (0.1f));
+        g.setColour (c.chord.isNoChord() ? bg.brighter (0.05f) : juce::Colour (0xff2a2722));
         g.fillRoundedRectangle (r, 3.0f);
         g.setColour (c.chord.isNoChord() ? faint : text);
         g.setFont (font (12.0f, true));

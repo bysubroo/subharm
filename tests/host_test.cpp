@@ -2,6 +2,8 @@
 // record with side chain -> analyse -> draw part -> stack -> play back locked to the
 // transport -> save/restore project -> export MIX/STEMS -> snapshot the UI.
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <thread>
+#include <atomic>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "../src/plugin/PluginProcessor.h"
@@ -228,6 +230,64 @@ int main (int argc, char** argv)
         check (f.getSize() > 1000, "UI snapshot written");
         proc2->editorBeingDeleted (ed.get());
         ed.reset();
+    }
+
+    // ---------- 8. robustness (what pluginval caught) ----------
+    {
+        // empty plugin -> state -> another empty plugin (no take, no session files)
+        auto a = std::make_unique<SubHarmProcessor>();
+        a->setBusesLayout (layout);
+        a->prepareToPlay (sr, block);
+        juce::MemoryBlock emptyState;
+        a->getStateInformation (emptyState);
+        auto b = std::make_unique<SubHarmProcessor>();
+        b->setBusesLayout (layout);
+        b->prepareToPlay (sr, block);
+        b->setStateInformation (emptyState.getData(), (int) emptyState.getSize());
+        b->setStateInformation (emptyState.getData(), (int) emptyState.getSize());
+        check (b->getTake().isEmpty() && b->getParts().empty(), "empty state round-trip (no crash)");
+
+        // project whose session folder is gone -> starts clean, no crash
+        juce::MemoryBlock st2;
+        proc->getStateInformation (st2);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (st2.getData(), (int) st2.getSize());
+        if (auto* song = xml->getChildByName ("Song")) song->setAttribute ("session", "missing-" + juce::Uuid().toString());
+        juce::MemoryBlock st3;
+        juce::AudioProcessor::copyXmlToBinary (*xml, st3);
+        b->setStateInformation (st3.getData(), (int) st3.getSize());
+        check (b->getTake().isEmpty() && b->getStacks().empty(), "project with missing audio loads clean (no crash)");
+
+        // host hands over fewer channels than the layout (side chain declared, buffer has 2)
+        juce::AudioBuffer<float> two (2, block);
+        two.clear();
+        FakePlayHead ph2; ph2.playing = true;
+        b->setPlayHead (&ph2);
+        for (int i = 0; i < 20; ++i) { ph2.time = i * block; b->processBlock (two, midi); }
+        juce::AudioBuffer<float> one (1, block);
+        one.clear();
+        b->processBlock (one, midi);
+        b->setPlayHead (nullptr);
+        b->processBlock (two, midi);   // no play head at all
+        check (true, "short buffers / no play head processed (no crash)");
+
+        // editor open while another thread processes audio
+        std::atomic<bool> run { true };
+        std::thread audio ([&]
+        {
+            juce::AudioBuffer<float> buf4 (4, block);
+            juce::MidiBuffer m;
+            while (run) { buf4.clear(); proc->processBlock (buf4, m); }
+        });
+        for (int k = 0; k < 3; ++k)
+        {
+            std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditorIfNeeded());
+            pump (300);
+            proc->editorBeingDeleted (ed.get());
+            ed.reset();
+        }
+        run = false;
+        audio.join();
+        check (true, "editor opened/closed 3x while processing (no crash)");
     }
 
     proc->setPlayHead (nullptr);

@@ -5,6 +5,8 @@
 - Fonts: Manrope (interface) and DSEG7 (LCD values), embedded (OFL)
 - Timeline renders from a cache: smooth playhead, lower CPU
 - CI: pluginval (strictness 5) on every build; macOS builds on release tags
+- Fix (found by pluginval): crash when a project without a recorded take is loaded or reloaded
+- Fix: hosts that pass fewer channels than the side chain layout no longer crash the plugin
 
 ## 0.4.0
 - Revoice-style doubles: own noise seed per voice (no more phasing), per-note timing and pitch, scoop, drift, vibrato depth, level ride, formant

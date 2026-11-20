@@ -116,23 +116,24 @@ void SubHarmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     juce::ScopedNoDenormals noDenormals;
     const int numSamples = buffer.getNumSamples();
 
-    auto mainIn = getBusBuffer (buffer, true, 0);
-    const int mainCh = mainIn.getNumChannels();
-
-    juce::AudioBuffer<float> side;
-    bool haveSide = getBusCount (true) > 1 && getBus (true, 1)->isEnabled();
-    if (haveSide)
+    // Hosts do not always hand over as many channels as the bus layout says:
+    // only read the channels that really exist in this buffer.
+    const int bufCh = buffer.getNumChannels();
+    const int mainCh = juce::jmin (getMainBusNumInputChannels(), bufCh);
+    int sideStart = 0, sideCh = 0;
+    if (getBusCount (true) > 1 && getBus (true, 1) != nullptr && getBus (true, 1)->isEnabled())
     {
-        side = getBusBuffer (buffer, true, 1);
-        haveSide = side.getNumChannels() > 0;
+        sideStart = getChannelIndexInProcessBlockBuffer (true, 1, 0);
+        sideCh = juce::jlimit (0, juce::jmax (0, bufCh - sideStart), getBus (true, 1)->getNumberOfChannels());
     }
+    const bool haveSide = sideCh > 0;
     sidechainConnected = haveSide;
 
     // side chain level for the LED
     float scRms = 0.0f;
     if (haveSide)
-        for (int c = 0; c < side.getNumChannels(); ++c)
-            scRms = std::max (scRms, side.getRMSLevel (c, 0, numSamples));
+        for (int c = 0; c < sideCh; ++c)
+            scRms = std::max (scRms, buffer.getRMSLevel (sideStart + c, 0, numSamples));
     sidechainLevel = std::max (scRms, sidechainLevel.load() * 0.9f);
 
     // transport
@@ -185,13 +186,13 @@ void SubHarmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         for (int i = 0; i < todo; ++i)
         {
             float v = 0.0f;
-            for (int c = 0; c < mainCh; ++c) v += mainIn.getSample (c, i);
+            for (int c = 0; c < mainCh; ++c) v += buffer.getSample (c, i);
             recVocal[(size_t) (pos + i)] = v / (float) juce::jmax (1, mainCh);
             float b = 0.0f;
             if (haveSide)
             {
-                for (int c = 0; c < side.getNumChannels(); ++c) b += side.getSample (c, i);
-                b /= (float) side.getNumChannels();
+                for (int c = 0; c < sideCh; ++c) b += buffer.getSample (sideStart + c, i);
+                b /= (float) sideCh;
             }
             recBeat[(size_t) (pos + i)] = b;
         }
@@ -201,10 +202,11 @@ void SubHarmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     lastBlockEnd = t + numSamples;
 
     // ---- lead through (or not) ----
+    const int outCh = juce::jmin (getMainBusNumOutputChannels(), bufCh);
     if (leadThruParam->load() < 0.5f)
-        for (int c = 0; c < getTotalNumOutputChannels(); ++c)
+        for (int c = 0; c < outCh; ++c)
             buffer.clear (c, 0, numSamples);
-    for (int c = getMainBusNumOutputChannels(); c < buffer.getNumChannels(); ++c)
+    for (int c = outCh; c < bufCh; ++c)
         buffer.clear (c, 0, numSamples);   // never leak the side chain to the output
 
     // ---- play stacks locked to the timeline ----
@@ -216,7 +218,7 @@ void SubHarmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     const auto& set = *playback;
     const double ratio = set.sampleRate / juce::jmax (1.0, getSampleRate());
     const float gain = juce::Decibels::decibelsToGain (stackLevelParam->load(), -60.0f);
-    const int outCh = getMainBusNumOutputChannels();
+    if (outCh < 1) return;
     float* outL = buffer.getWritePointer (0);
     float* outR = outCh > 1 ? buffer.getWritePointer (1) : nullptr;
 
@@ -836,9 +838,13 @@ void SubHarmProcessor::getStateInformation (juce::MemoryBlock& dest)
 
 static bool readMonoWav (const juce::File& f, std::vector<float>& out)
 {
+    out.clear();
+    if (! f.existsAsFile()) return false;
+    auto stream = f.createInputStream();
+    if (stream == nullptr) return false;
     juce::WavAudioFormat wav;
-    std::unique_ptr<juce::AudioFormatReader> r (wav.createReaderFor (f.createInputStream().release(), true));
-    if (r == nullptr) return false;
+    std::unique_ptr<juce::AudioFormatReader> r (wav.createReaderFor (stream.release(), true));
+    if (r == nullptr || r->lengthInSamples <= 0 || r->lengthInSamples > (juce::int64) 48000 * 60 * 30) return false;
     juce::AudioBuffer<float> b (1, (int) r->lengthInSamples);
     r->read (&b, 0, (int) r->lengthInSamples, 0, true, false);
     out.assign (b.getReadPointer (0), b.getReadPointer (0) + b.getNumSamples());
@@ -875,8 +881,12 @@ void SubHarmProcessor::setStateInformation (const void* data, int size)
     selectedPart = song->getIntAttribute ("selectedPart", -1);
 
     auto dir = getSessionFolder();
-    readMonoWav (dir.getChildFile ("vocal.wav"), take.vocal);
-    readMonoWav (dir.getChildFile ("beat.wav"), take.beat);
+    if (song->getIntAttribute ("length") > 0)
+    {
+        readMonoWav (dir.getChildFile ("vocal.wav"), take.vocal);
+        readMonoWav (dir.getChildFile ("beat.wav"), take.beat);
+    }
+    if (take.vocal.empty()) take.analysed = false;   // audio missing: start clean instead of half a song
     if (take.beat.size() != take.vocal.size()) take.beat.resize (take.vocal.size(), 0.0f);
     take.computePeaks();
 
@@ -914,6 +924,7 @@ void SubHarmProcessor::setStateInformation (const void* data, int size)
         lastSeenState[s->id] = StackEntry::Done;
         stacks.push_back (s);
     }
+    if (take.vocal.empty()) { parts.clear(); stacks.clear(); take.chords.clear(); }
     rebuildPlayback();
     sendChangeMessage();
 }

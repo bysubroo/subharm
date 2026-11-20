@@ -3,6 +3,17 @@ if (APPLE)
     list (APPEND SUBHARM_FORMATS AU)
 endif()
 
+juce_add_binary_data (SubHarmAssets
+    HEADER_NAME BinaryData.h
+    NAMESPACE BinaryData
+    SOURCES
+        ${CMAKE_SOURCE_DIR}/assets/fonts/Manrope-Medium.ttf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/Manrope-SemiBold.ttf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/Manrope-Bold.ttf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/Manrope-ExtraBold.ttf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/DSEG7Classic-Bold.ttf)
+set_target_properties (SubHarmAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 juce_add_plugin (SubHarm
     COMPANY_NAME "SubRoo"
     COMPANY_WEBSITE "https://subroo.xyz"
@@ -36,6 +47,7 @@ target_compile_definitions (SubHarm PUBLIC
 target_link_libraries (SubHarm
     PRIVATE
         subharm_core
+        SubHarmAssets
         juce::juce_audio_utils
         juce::juce_audio_formats
         juce::juce_audio_processors

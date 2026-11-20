@@ -52,6 +52,14 @@ jobs:
         run: |
           mkdir out
           .\build\tests\Release\subharm_core_test.exe out
+      - name: pluginval (strictness 5)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pv.zip
+          Expand-Archive pv.zip -DestinationPath pv -Force
+          $p = Start-Process -FilePath .\pv\pluginval.exe -ArgumentList '--strictness-level 5 --validate-in-process --timeout-ms 600000 --output-dir pvlog "build\src\plugin\SubHarm_artefacts\Release\VST3\SubHarm.vst3"' -Wait -PassThru -NoNewWindow
+          Get-ChildItem pvlog -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName | Select-Object -Last 40 }
+          if ($p.ExitCode -ne 0) { Write-Error "pluginval failed"; exit 1 }
       - name: Build .exe installer (Inno Setup)
         shell: pwsh
         run: |
@@ -70,6 +78,8 @@ jobs:
 
   macos:
     name: macOS (VST3 + AU + app + pkg, Universal)
+    # macOS minutes cost 10x on private repos: build Mac for releases (tags) and manual runs
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +87,15 @@ jobs:
         run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSUBHARM_BUILD_TESTS=OFF
       - name: Build
         run: cmake --build build --config Release --target SubHarm_VST3 SubHarm_AU SubHarm_Standalone -- -quiet
+      - name: pluginval (VST3 + AU)
+        run: |
+          curl -sSL -o pv.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pv.zip
+          ART=build/src/plugin/SubHarm_artefacts/Release
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate-in-process --timeout-ms 600000 "$ART/VST3/SubHarm.vst3"
+          cp -R "$ART/AU/SubHarm.component" ~/Library/Audio/Plug-Ins/Components/ 2>/dev/null || (mkdir -p ~/Library/Audio/Plug-Ins/Components && cp -R "$ART/AU/SubHarm.component" ~/Library/Audio/Plug-Ins/Components/)
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate-in-process --timeout-ms 600000 ~/Library/Audio/Plug-Ins/Components/SubHarm.component
       - name: Ad-hoc sign + .pkg installer
         run: |
           VER=$(sed -n 's/^project (SubHarm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
@@ -105,11 +124,23 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: Release notes from CHANGELOG
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          awk -v v="## $VER" 'index($0,v)==1{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          cat >> notes.md <<'EOT'
+
+          ### Install
+          - **Windows:** run `SubHarm-x.y.z-Windows-Setup.exe`. SmartScreen: *More info* -> *Run anyway* (the installer is not code-signed).
+          - **macOS:** open `SubHarm-x.y.z-macOS.pkg`. First time: right-click -> *Open* (not notarized).
+          EOT
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: notes.md
           files: |
             artifacts/SubHarm-Windows-Installer/*.exe
             artifacts/SubHarm-macOS-Installer/*.pkg

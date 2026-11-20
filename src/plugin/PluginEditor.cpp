@@ -4,14 +4,15 @@ namespace subharm
 {
 using namespace theme;
 
+static juce::String dot() { return juce::String::fromUTF8 ("  \xc2\xb7  "); }
+
 // =====================================================================================
 Segment::Segment (juce::RangedAudioParameter& p, juce::StringArray labels) : param (p)
 {
     for (int i = 0; i < labels.size(); ++i)
     {
         auto* b = buttons.add (new juce::TextButton (labels[i]));
-        b->setClickingTogglesState (false);
-        b->getProperties().set ("lamp", true);
+        b->getProperties().set ("kind", "seg");
         b->onClick = [this, i]
         {
             param.beginChangeGesture();
@@ -24,18 +25,27 @@ Segment::Segment (juce::RangedAudioParameter& p, juce::StringArray labels) : par
     update();
 }
 
+void Segment::paint (juce::Graphics& g)
+{
+    g.setColour (bgDeep);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
+    g.setColour (border);
+    g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 8.0f, 1.0f);
+}
+
 void Segment::resized()
 {
-    auto r = getLocalBounds();
+    auto r = getLocalBounds().reduced (3);
     const int w = r.getWidth() / juce::jmax (1, buttons.size());
-    for (auto* b : buttons) b->setBounds (r.removeFromLeft (w).reduced (2, 0));
+    for (auto* b : buttons) b->setBounds (r.removeFromLeft (w));
 }
 
 void Segment::update()
 {
     const int idx = (int) std::lround (param.convertFrom0to1 (param.getValue()));
     for (int i = 0; i < buttons.size(); ++i)
-        buttons[i]->setToggleState (i == idx, juce::dontSendNotification);
+        if (buttons[i]->getToggleState() != (i == idx))
+            buttons[i]->setToggleState (i == idx, juce::dontSendNotification);
 }
 
 // =====================================================================================
@@ -43,23 +53,38 @@ void DragTile::paint (juce::Graphics& g)
 {
     bool any = false;
     for (const auto& s : proc.getStacks()) any |= s->enabled && s->state.load() == StackEntry::Done;
+    const bool over = isMouseOver();
     auto r = getLocalBounds().toFloat().reduced (1.0f);
-    g.setColour (juce::Colours::black.withAlpha (0.6f));
-    g.fillRoundedRectangle (r.translated (0, 2.0f), 6.0f);
-    auto face = r.withTrimmedBottom (2.0f);
-    const auto base = any ? panelHi : panelHi.darker (0.4f);
-    g.setGradientFill (juce::ColourGradient (base.brighter (0.15f), 0, face.getY(), base.darker (0.3f), 0, face.getBottom(), false));
-    g.fillRoundedRectangle (face, 6.0f);
-    g.setColour (juce::Colours::black.withAlpha (0.8f));
-    g.drawRoundedRectangle (face, 6.0f, 1.0f);
-    // grip lines
-    g.setColour (juce::Colours::black.withAlpha (0.35f));
-    for (int i = 0; i < 3; ++i) g.drawHorizontalLine ((int) face.getBottom() - 10 - i * 4, face.getCentreX() - 14, face.getCentreX() + 14);
-    lamp (g, { face.getX() + 12.0f, face.getY() + 12.0f }, 3.5f, accent, any);
-    engrave (g, isStems ? "STEMS" : "MIX", face.withTrimmedBottom (face.getHeight() * 0.42f).toNearestInt(),
-             juce::Justification::centredBottom, any ? text : faint, 16.0f);
-    engrave (g, isStems ? "line by line" : "one track", face.withTrimmedTop (face.getHeight() * 0.58f).withTrimmedBottom (16).toNearestInt(),
-             juce::Justification::centredTop, dim, 9.0f, false);
+    const auto c = isStems ? secondary : primary;
+
+    if (any && over)
+    {
+        juce::Path p; p.addRoundedRectangle (r.reduced (2.0f), 8.0f);
+        glowPath (g, p, c, 12, 0.45f);
+    }
+    g.setColour (any ? (over ? surfaceHi.brighter (0.05f) : surfaceHi) : surface);
+    g.fillRoundedRectangle (r, 8.0f);
+    g.setColour (any ? c.withAlpha (over ? 1.0f : 0.6f) : border);
+    juce::Path dash; dash.addRoundedRectangle (r, 8.0f);
+    juce::Path dashed;
+    const float pat[] = { 5.0f, 4.0f };
+    juce::PathStrokeType (1.2f).createDashedStroke (dashed, dash, pat, 2);
+    g.fillPath (dashed);
+
+    // drag glyph: three stacked bars
+    auto icon = juce::Rectangle<float> (r.getX() + 14.0f, r.getCentreY() - 9.0f, 18.0f, 18.0f);
+    g.setColour (any ? c : faint);
+    for (int i = 0; i < 3; ++i)
+        g.fillRoundedRectangle (icon.getX() + (isStems ? 0.0f : i * 2.0f), icon.getY() + i * 6.5f + 1.0f,
+                                isStems ? 18.0f - i * 4.0f : 14.0f, 3.5f, 1.5f);
+
+    auto t = r.withTrimmedLeft (42.0f);
+    g.setColour (any ? text : faint);
+    g.setFont (ui (13.0f, Weight::ExtraBold));
+    g.drawText (isStems ? "STEMS" : "MIX", t.withTrimmedBottom (t.getHeight() * 0.45f), juce::Justification::bottomLeft);
+    g.setColour (any ? muted : faint);
+    g.setFont (ui (10.5f, Weight::Medium));
+    g.drawText (isStems ? "track per line, dry" : "ticked stacks, stereo", t.withTrimmedTop (t.getHeight() * 0.55f), juce::Justification::topLeft);
 }
 
 void DragTile::mouseDrag (const juce::MouseEvent& e)
@@ -78,60 +103,84 @@ void StacksList::paint (juce::Graphics& g)
     if (stacks.empty())
     {
         g.setColour (faint);
-        g.setFont (font (12.0f));
-        g.drawFittedText ("Your stacks show up here. Tick the ones you want to hear and drag them out.",
+        g.setFont (ui (12.0f, Weight::Medium));
+        g.drawFittedText ("Draw a part on your vocal, pick the lines\nand hit STACK HARMONIES.",
                           getLocalBounds().reduced (10), juce::Justification::centred, 3);
         return;
     }
     int y = 0;
     for (const auto& s : stacks)
     {
-        auto row = juce::Rectangle<int> (0, y, getWidth(), kRow - 4);
-        recess (g, row.toFloat().reduced (0.5f), 4.0f, bg);
+        auto row = juce::Rectangle<float> (0.0f, (float) y, (float) getWidth(), (float) kRow - 6.0f);
+        const bool done = s->state.load() == StackEntry::Done;
+        const bool on = s->enabled && done;
+        const bool selected = s->partId == proc.selectedPart;
+
+        g.setColour (selected ? surfaceHi.brighter (0.03f) : surfaceHi);
+        g.fillRoundedRectangle (row, 8.0f);
+        g.setColour (selected ? primary.withAlpha (0.45f) : border);
+        g.drawRoundedRectangle (row.reduced (0.5f), 8.0f, 1.0f);
+
+        // enable dot
+        juce::Path d; d.addEllipse (12.0f, row.getCentreY() - 6.0f, 12.0f, 12.0f);
+        if (on) glowPath (g, d, secondary, 8, 0.8f);
+        g.setColour (on ? secondary : faint.withAlpha (0.6f));
+        if (on) g.fillPath (d); else g.strokePath (d, juce::PathStrokeType (1.4f));
 
         int colour = 0;
         for (const auto& p : proc.getParts()) if (p.id == s->partId) colour = p.colourIndex;
-        const bool done = s->state.load() == StackEntry::Done;
-
-        // tick box
-        lamp (g, { 18.0f, (float) y + (kRow - 4) / 2.0f }, 5.0f, accent, s->enabled && done);
-
-        // part badge
-        auto badge = juce::Rectangle<float> (34.0f, (float) y + 8.0f, 24.0f, (float) kRow - 20.0f);
+        auto badge = juce::Rectangle<float> (34.0f, row.getCentreY() - 11.0f, 22.0f, 22.0f);
+        g.setColour (partColour (colour).withAlpha (0.2f));
+        g.fillRoundedRectangle (badge, 6.0f);
         g.setColour (partColour (colour));
-        g.fillRoundedRectangle (badge, 4.0f);
-        g.setColour (bg);
-        g.setFont (font (12.0f, true));
+        g.drawRoundedRectangle (badge, 6.0f, 1.2f);
+        g.setFont (ui (12.0f, Weight::ExtraBold));
         g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + (s->partId - 1) % 26)), badge, juce::Justification::centred);
 
-        g.setColour (accent.brighter (0.4f));
-        g.setFont (font (12.0f, true));
-        g.drawText (juce::String (numLines (s->settings.lines) * 2) + " voices" + juce::String::fromUTF8 (" · ") + toString (s->settings.flavour)
-                        + juce::String::fromUTF8 (" · ") + toString (s->settings.crew) + juce::String::fromUTF8 (" · ") + toString (s->settings.delivery)
-                        + juce::String::fromUTF8 (" · ") + toString (s->settings.humanize),
-                    66, y + 4, getWidth() - 190, 18, juce::Justification::centredLeft);
-        g.setColour (dim);
-        g.setFont (font (10.0f));
-        g.drawText (s->label(), 66, y + 20, getWidth() - 190, 16, juce::Justification::centredLeft, true);
+        g.setColour (text);
+        g.setFont (ui (12.5f, Weight::Bold));
+        g.drawText (juce::String (numLines (s->settings.lines) * 2) + " voices" + dot() + toString (s->settings.flavour)
+                        + dot() + toString (s->settings.humanize),
+                    66, (int) row.getY() + 6, getWidth() - 170, 16, juce::Justification::centredLeft);
+        g.setColour (muted);
+        g.setFont (ui (10.5f, Weight::Medium));
+        g.drawText (juce::String (toString (s->settings.crew)) + dot() + toString (s->settings.delivery),
+                    66, (int) row.getY() + 23, getWidth() - 170, 14, juce::Justification::centredLeft);
+
+        // line colour dots (which lines are in this stack)
+        float lx = (float) getWidth() - 104.0f;
+        for (auto t : kLineDisplayOrder)
+            if (hasLine (s->settings.lines, t))
+            {
+                g.setColour (lineColour (t));
+                g.fillEllipse (lx, row.getCentreY() - 3.0f, 6.0f, 6.0f);
+                lx += 8.0f;
+            }
 
         const int st = s->state.load();
         if (st == StackEntry::Queued || st == StackEntry::Rendering)
         {
-            auto bar = juce::Rectangle<float> ((float) getWidth() - 120.0f, (float) y + kRow / 2.0f - 4.0f, 80.0f, 4.0f);
-            g.setColour (line); g.fillRoundedRectangle (bar, 2.0f);
-            g.setColour (accent); g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * s->progress.load()), 2.0f);
-            g.setColour (dim); g.setFont (font (10.0f));
-            g.drawText (st == StackEntry::Queued ? "queued" : "stacking", (int) bar.getX(), y + 4, 80, 12, juce::Justification::centred);
+            auto bar = juce::Rectangle<float> (66.0f, row.getBottom() - 6.0f, (float) getWidth() - 110.0f, 2.5f);
+            g.setColour (border);
+            g.fillRoundedRectangle (bar, 1.2f);
+            auto fill = bar.withWidth (bar.getWidth() * juce::jmax (0.02f, s->progress.load()));
+            juce::Path pf; pf.addRoundedRectangle (fill, 1.2f);
+            glowPath (g, pf, primary, 6, 0.9f);
+            g.setColour (primaryHi);
+            g.fillPath (pf);
         }
         else if (st == StackEntry::Failed)
         {
-            g.setColour (accent); g.setFont (font (11.0f));
-            g.drawText ("failed", getWidth() - 120, y, 80, kRow - 4, juce::Justification::centred);
+            g.setColour (error);
+            g.setFont (ui (11.0f, Weight::Bold));
+            g.drawText ("failed", getWidth() - 120, (int) row.getY(), 60, (int) row.getHeight(), juce::Justification::centredRight);
         }
 
-        g.setColour (dim);
-        g.setFont (font (15.0f));
-        g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")), getWidth() - 34, y, 28, kRow - 4, juce::Justification::centred);
+        // remove
+        const float cx = (float) getWidth() - 20.0f, cy = row.getCentreY();
+        g.setColour (muted);
+        g.drawLine (cx - 4, cy - 4, cx + 4, cy + 4, 1.5f);
+        g.drawLine (cx - 4, cy + 4, cx + 4, cy - 4, 1.5f);
         y += kRow;
     }
 }
@@ -158,21 +207,28 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
 {
     setLookAndFeel (&lnf);
 
-    recordButton.setComponentID ("rec");
+    // ---- top bar ----
+    recordButton.getProperties().set ("kind", "rec");
     recordButton.onClick = [this] { proc.toggleRecord(); refresh(); };
     addAndMakeVisible (recordButton);
+
+    keyBox.getProperties().set ("big", true);
+    keyBox.addItemList (SubHarmProcessor::keyChoices(), 1);
+    keyBox.setTooltip ("Key of the song. Auto detects it; a key you choose also locks the chord detection to it.");
+    addAndMakeVisible (keyBox);
+    keyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "key", keyBox);
+
+    addAndMakeVisible (leadThru);
+    leadAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "leadThru", leadThru);
+
+    // ---- song ----
+    addAndMakeVisible (timeline);
     zoomOut.onClick = [this] { timeline.zoom (0.7); };
     zoomIn.onClick = [this] { timeline.zoom (1.4); };
     fitButton.onClick = [this] { timeline.fit(); };
     for (auto* b : { &zoomOut, &zoomIn, &fitButton }) addAndMakeVisible (b);
-    addAndMakeVisible (leadThru);
-    leadAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "leadThru", leadThru);
-    addAndMakeVisible (timeline);
 
-    keyBox.addItemList (SubHarmProcessor::keyChoices(), 1);
-    addAndMakeVisible (keyBox);
-    keyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "key", keyBox);
-
+    // ---- lines ----
     auto shortName = [] (LineType t) -> juce::String
     {
         switch (t)
@@ -186,26 +242,29 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     };
     for (auto t : kLineDisplayOrder)
     {
-        const int i = (int) t;
         auto* b = lineButtons.add (new juce::TextButton (shortName (t)));
         b->setClickingTogglesState (true);
+        b->getProperties().set ("kind", "token");
+        b->getProperties().set ("tint", (juce::int64) lineColour (t).getARGB());
         juce::String tip = lineName (t);
         if (t == LineType::PedalRoot) tip << ": one constant note on the key's tonic";
         else if (t == LineType::PedalFifth) tip << ": one constant note on the key's 5th";
         else if (t == LineType::Double) tip << ": your melody doubled, Revoice-style";
-        b->setTooltip (tip + " (L + R take)");
+        else if (t == LineType::ChordHigh || t == LineType::ChordLow) tip << ": follows the chords (flavour colours it)";
+        b->setTooltip (tip + "  |  L + R take");
         addAndMakeVisible (b);
-        lineAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, "line" + juce::String (i), *b));
+        lineAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, "line" + juce::String ((int) t), *b));
     }
     const char* presetNames[3] = { "Short", "SubRoo", "Full" };
     for (int i = 0; i < 3; ++i)
     {
         auto* b = presetButtons.add (new juce::TextButton (presetNames[i]));
         b->onClick = [this, i] { proc.applyLinePreset ((StackSize) i); };
-        b->setColour (juce::TextButton::buttonColourId, panelHi.darker (0.15f));
         addAndMakeVisible (b);
     }
 
+    // ---- performance ----
+    for (auto* s : { &flavourSeg, &humanizeSeg }) addAndMakeVisible (s);
     crewBox.addItemList ({ "Your voice", "Wide crew", "Deeper crew", "Lighter crew" }, 1);
     deliveryBox.addItemList ({ "Natural", "Airy", "Gentle", "Full voice", "Energetic" }, 1);
     addAndMakeVisible (crewBox);
@@ -213,35 +272,38 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     crewAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "crew", crewBox);
     deliveryAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "delivery", deliveryBox);
 
-    for (auto* s : { &flavourSeg, &humanizeSeg }) addAndMakeVisible (s);
-
-    stackButton.setButtonText ("STACK HARMONIES");
-    stackButton.setColour (juce::TextButton::buttonColourId, accent);
-    stackButton.onClick = [this] { proc.stackHarmonies(); };
-    addAndMakeVisible (stackButton);
-    stackInfo.setJustificationType (juce::Justification::centred);
-    stackInfo.setFont (font (11.0f));
-    stackInfo.setColour (juce::Label::textColourId, dim);
-    addAndMakeVisible (stackInfo);
-
-    stacksViewport.setViewedComponent (&stacksList, false);
-    stacksViewport.setScrollBarsShown (true, false);
-    addAndMakeVisible (stacksViewport);
-    addAndMakeVisible (mixTile);
-    addAndMakeVisible (stemsTile);
-
+    // ---- output ----
     for (auto* k : { &sauceKnob, &levelKnob })
     {
         k->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        k->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 16);
-        k->setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        k->setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        k->setRotaryParameters (juce::degreesToRadians (225.0f), juce::degreesToRadians (495.0f), true);
         addAndMakeVisible (k);
     }
     sauceAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "sauce", sauceKnob);
     levelAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "stackLevel", levelKnob);
-    sauceKnob.setTextValueSuffix (" %");
-    levelKnob.setTextValueSuffix (" dB");
+    sauceKnob.textFromValueFunction = [] (double v) { return juce::String ((int) std::lround (v)); };
+    levelKnob.textFromValueFunction = [] (double v) { return juce::String (v, 1); };
+    sauceKnob.setTooltip ("Sauce: stereo width, air and a touch of saturation on the stacks (STEMS stay dry)");
+    levelKnob.setTooltip ("Level of the stacks in playback (dB)");
 
+    // ---- stacks ----
+    stackButton.setButtonText ("STACK HARMONIES");
+    stackButton.getProperties().set ("kind", "primary");
+    stackButton.onClick = [this] { proc.stackHarmonies(); };
+    addAndMakeVisible (stackButton);
+    stackInfo.setJustificationType (juce::Justification::centred);
+    stackInfo.setFont (ui (11.0f, Weight::Medium));
+    stackInfo.setColour (juce::Label::textColourId, muted);
+    addAndMakeVisible (stackInfo);
+    stacksViewport.setViewedComponent (&stacksList, false);
+    stacksViewport.setScrollBarsShown (true, false);
+    stacksViewport.setScrollBarThickness (8);
+    addAndMakeVisible (stacksViewport);
+    addAndMakeVisible (mixTile);
+    addAndMakeVisible (stemsTile);
+
+    // ---- status bar ----
     exportButton.onClick = [this]
     {
         chooser = std::make_unique<juce::FileChooser> ("Export SubHarm stacks to folder",
@@ -256,21 +318,19 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
                                   dir.revealToUser();
                               });
     };
-    addAndMakeVisible (exportButton);
-
-    folderButton.setButtonText ("SESSION FOLDER");
     folderButton.onClick = [this]
     {
         auto f = proc.getSessionFolder();
         if (f.isDirectory()) f.revealToUser();
         else f.getParentDirectory().revealToUser();
     };
+    addAndMakeVisible (exportButton);
     addAndMakeVisible (folderButton);
 
     proc.addChangeListener (this);
     setResizable (true, true);
-    setResizeLimits (1060, 840, 2200, 1500);
-    setSize (1180, 880);
+    setResizeLimits (1100, 760, 2200, 1500);
+    setSize (1240, 820);
     refresh();
     startTimerHz (30);
 }
@@ -281,234 +341,248 @@ SubHarmEditor::~SubHarmEditor()
     setLookAndFeel (nullptr);
 }
 
-void SubHarmEditor::drawCard (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& num, const juce::String& title)
-{
-    // a recessed module on the faceplate, with its number stamped in a ring
-    recess (g, r.toFloat(), 6.0f, juce::Colours::black.withAlpha (0.18f));
-    auto ring = juce::Rectangle<float> ((float) r.getX() + 12, (float) r.getY() + 11, 20, 20);
-    g.setColour (juce::Colours::black.withAlpha (0.5f));
-    g.drawEllipse (ring.translated (0, 1), 1.4f);
-    g.setColour (dim);
-    g.drawEllipse (ring, 1.4f);
-    engrave (g, num, ring.toNearestInt(), juce::Justification::centred, text, 10.5f);
-    engrave (g, title, { r.getX() + 40, r.getY() + 11, r.getWidth() - 60, 20 }, juce::Justification::centredLeft, text, 11.5f);
-}
-
+// =====================================================================================
 void SubHarmEditor::paint (juce::Graphics& g)
 {
-    if (faceplate.getWidth() != getWidth() || faceplate.getHeight() != getHeight() - 30)
-        faceplate = makeFaceplate (getWidth(), getHeight() - 30, kEar);
-    g.drawImageAt (faceplate, 0, 0);
+    g.fillAll (bg);
 
-    // ---- header: nameplate ----
-    drawNameplate (g, nameplate.toFloat(), "SubHarm", "VOCAL HARMONY STACKER  SH-2");
+    // ---------------- top bar ----------------
+    g.setColour (bgDeep);
+    g.fillRect (topBar);
+    g.setColour (border);
+    g.drawHorizontalLine (topBar.getBottom() - 1, 0.0f, (float) getWidth());
 
-    // ---- header: song display (key / tempo / length) ----
-    {
-        recess (g, songDisplay.toFloat(), 4.0f, bg);
-        const auto& take = proc.getTake();
-        auto d = songDisplay.reduced (10, 4);
-        auto cell = [&] (const char* label, const juce::String& value, int w)
+    {   // logo: stacked bars mark + wordmark
+        auto l = logoArea.toFloat();
+        auto mark = l.removeFromLeft (30.0f).withSizeKeepingCentre (26.0f, 24.0f);
+        const juce::Colour mc[3] = { secondary, primary, warm };
+        for (int i = 0; i < 3; ++i)
         {
-            auto c = d.removeFromLeft (w);
-            g.setColour (faint);
-            g.setFont (font (8.5f, true).withExtraKerningFactor (0.1f));
-            g.drawText (label, c.removeFromTop (12), juce::Justification::centredLeft);
-            g.setColour (accent.brighter (0.4f));
-            g.setFont (font (15.0f, true));
-            g.drawText (value, c, juce::Justification::centredLeft);
-        };
-        juce::String key = "--", bpm = "--", len = "--:--";
+            juce::Path bar;
+            bar.addRoundedRectangle (mark.getX() + i * 3.0f, mark.getY() + i * 8.5f, mark.getWidth() - i * 6.0f, 5.5f, 2.5f);
+            glowPath (g, bar, mc[i], 6, 0.6f);
+            g.setColour (mc[i]);
+            g.fillPath (bar);
+        }
+        l.removeFromLeft (10.0f);
+        g.setColour (text);
+        g.setFont (ui (21.0f, Weight::ExtraBold));
+        g.drawText ("SubHarm", l.withTrimmedBottom (14.0f), juce::Justification::bottomLeft);
+        g.setColour (muted);
+        g.setFont (label (8.5f));
+        g.drawText ("BY SUBROO", l.withTrimmedTop (l.getHeight() - 16.0f), juce::Justification::topLeft);
+    }
+
+    const auto& take = proc.getTake();
+    {
+        juce::String bpm = "--.-", len = "-:--";
         if (! take.isEmpty())
         {
-            if (take.analysed) key = juce::String (take.key.name()) + (take.keyForced ? "" : " A");
-            else key = "...";
             if (take.bpm > 0) bpm = juce::String (take.bpm, 1);
             const int secs = (int) take.lengthSeconds();
             len = juce::String (secs / 60) + ":" + juce::String (secs % 60).paddedLeft ('0', 2);
         }
-        cell (take.keyForced ? "KEY (SET)" : "KEY (AUTO)", key, juce::jmax (90, d.getWidth() / 2));
-        cell ("BPM", bpm, d.getWidth() / 2);
-        cell ("TAKE", len, d.getWidth());
+        lcdReadout (g, bpmArea.toFloat(), "BPM", bpm, "888.8", primaryHi);
+        lcdReadout (g, takeArea.toFloat(), "TAKE", len, "8:88", primaryHi);
+        // key status above the key box
+        g.setFont (label (8.5f));
+        g.setColour (take.keyForced ? warm : secondary);
+        juce::String ks = take.isEmpty() ? "KEY"
+                        : ! take.analysed ? "KEY  |  READING THE SONG..."
+                        : take.keyForced ? "KEY  |  SET BY YOU"
+                        : "KEY  |  DETECTED " + juce::String (take.key.name()).toUpperCase();
+        g.drawText (ks, keyBox.getBounds().translated (0, -16).withHeight (13), juce::Justification::centredLeft);
     }
 
-    // ---- header: side chain VU ----
-    drawVu (g, vuArea.toFloat(), vuNeedle, proc.isSidechainConnected());
-
-    drawCard (g, partsCard, "1", "PICK YOUR PARTS");
-    engrave (g, juce::String::fromUTF8 ("drag on the vocal = new part  ·  drag edges = resize (Alt: free)  ·  click a chord to fix it  ·  Ctrl+wheel = zoom"),
-             { partsCard.getX() + 200, partsCard.getY() + 12, partsCard.getWidth() - 360, 20 }, juce::Justification::centredLeft, faint, 9.5f, false);
-    drawCard (g, voicesCard, "2", "CHOOSE YOUR VOICES");
-    drawCard (g, singCard, "3", "HOW THEY SING");
-    auto lbl = [&] (juce::Rectangle<int> r, const char* t) { engrave (g, t, r, juce::Justification::centredLeft, dim, 9.5f); };
-    lbl ({ singCard.getX() + 16, flavourSeg.getY(), 80, flavourSeg.getHeight() }, "FLAVOUR");
-    lbl ({ singCard.getX() + 16, humanizeSeg.getY(), 80, humanizeSeg.getHeight() }, "HUMANIZE");
-    if (! lineButtons.isEmpty())
-    {
-        lbl ({ singCard.getX() + 16, lineButtons[0]->getY(), 80, lineButtons[0]->getHeight() }, "LINES");
-        lbl ({ singCard.getX() + 16, presetButtons[0]->getY(), 80, presetButtons[0]->getHeight() }, "PRESET");
-        engrave (g, "each line = L + R take", { presetButtons[2]->getRight() + 10, presetButtons[0]->getY(),
-                 singCard.getRight() - presetButtons[2]->getRight() - 24, presetButtons[0]->getHeight() },
-                 juce::Justification::centredLeft, faint, 9.0f, false);
+    {   // side chain meter
+        auto r = scArea.toFloat();
+        g.setColour (faint);
+        g.setFont (label (8.5f));
+        const bool connected = proc.isSidechainConnected();
+        g.drawText (connected ? "SIDE CHAIN" : "SIDE CHAIN  |  NOT CONNECTED", r.removeFromTop (14.0f), juce::Justification::centredLeft);
+        ledMeter (g, r.withSizeKeepingCentre (r.getWidth(), 10.0f), scLevel, secondary);
     }
-    lbl ({ keyBox.getX(), keyBox.getY() - 16, 120, 14 }, "KEY");
-    lbl ({ crewBox.getX(), crewBox.getY() - 16, 120, 14 }, "VOICES");
-    lbl ({ deliveryBox.getX(), deliveryBox.getY() - 16, 120, 14 }, "DELIVERY");
-    drawCard (g, stackCard, "4", "STACK HARMONIES");
-    drawCard (g, stacksCard, "5", "YOUR STACKS");
-    engrave (g, "SAUCE", { sauceKnob.getX(), sauceKnob.getY() - 14, sauceKnob.getWidth(), 14 }, juce::Justification::centred, dim, 9.5f);
-    engrave (g, "LEVEL", { levelKnob.getX(), levelKnob.getY() - 14, levelKnob.getWidth(), 14 }, juce::Justification::centred, dim, 9.5f);
-    engrave (g, "DRAG TO YOUR DAW", { mixTile.getX(), mixTile.getY() - 16, 200, 14 }, juce::Justification::centredLeft, faint, 9.0f);
-    drawLedLadder (g, outMeter.toFloat(), outLevel, "OUT");
 
-    // ---- bottom toolbar ----
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1c1b19), 0, (float) toolbar.getY(), juce::Colour (0xff121110), 0, (float) toolbar.getBottom(), false));
-    g.fillRect (toolbar);
-    g.setColour (juce::Colours::black);
-    g.drawHorizontalLine (toolbar.getY(), (float) toolbar.getX(), (float) toolbar.getRight());
-    g.setColour (juce::Colours::white.withAlpha (0.06f));
-    g.drawHorizontalLine (toolbar.getY() + 1, (float) toolbar.getX(), (float) toolbar.getRight());
-    auto tb = toolbar.reduced (kEar + 12, 0);
-    g.setFont (font (11.0f, true).withExtraKerningFactor (0.06f));
-    g.setColour (text);
-    g.drawText ("SubHarm", tb.removeFromLeft (80), juce::Justification::centredLeft);
+    // ---------------- panels ----------------
+    panelBox (g, songPanel.toFloat(), "SONG");
     g.setColour (faint);
-    g.setFont (font (10.5f));
-    g.drawText (juce::String ("v") + SUBHARM_VERSION + juce::String::fromUTF8 ("  ·  SubRoo  ·  ") + status,
-                tb.withTrimmedRight (170), juce::Justification::centredLeft);
+    g.setFont (ui (10.5f, Weight::Medium));
+    g.drawText (juce::String::fromUTF8 ("drag on the vocal = new part  \xc2\xb7  drag edges = resize (Alt: free)  \xc2\xb7  click a chord to fix it"),
+                juce::Rectangle<int> (songPanel.getX() + 80, songPanel.getY(), zoomOut.getX() - songPanel.getX() - 96, 34),
+                juce::Justification::centredRight);
+    panelBox (g, linesPanel.toFloat(), "LINES");
+    panelBox (g, perfPanel.toFloat(), "PERFORMANCE");
+    panelBox (g, outPanel.toFloat(), "OUTPUT");
+    panelBox (g, stacksPanel.toFloat(), "STACKS");
+
+    auto small = [&] (juce::Rectangle<int> r, const juce::String& t)
+    {
+        g.setColour (faint);
+        g.setFont (label (8.5f));
+        g.drawText (t, r, juce::Justification::centredLeft);
+    };
+    small (flavourSeg.getBounds().translated (0, -16).withHeight (14), "FLAVOUR  |  CHORD LINES");
+    small (humanizeSeg.getBounds().translated (0, -16).withHeight (14), "HUMANIZE  |  TIMING + PITCH");
+    small (crewBox.getBounds().translated (0, -16).withHeight (14), "VOICES");
+    small (deliveryBox.getBounds().translated (0, -16).withHeight (14), "DELIVERY");
+    if (! presetButtons.isEmpty())
+        small (presetButtons[0]->getBounds().translated (0, -16).withHeight (14).withWidth (200), "PRESETS");
+
+    auto knobLabel = [&] (juce::Slider& k, const char* t)
+    {
+        g.setColour (muted);
+        g.setFont (label (9.5f));
+        g.drawText (t, k.getBounds().withY (k.getBottom() - 6).withHeight (14), juce::Justification::centred);
+    };
+    knobLabel (sauceKnob, "SAUCE");
+    knobLabel (levelKnob, "LEVEL dB");
+
+    {   // stacks output meter
+        auto r = outMeterArea.toFloat();
+        g.setColour (faint);
+        g.setFont (label (8.5f));
+        g.drawText ("STACKS OUT", r.removeFromTop (14.0f), juce::Justification::centredLeft);
+        ledMeter (g, r.withSizeKeepingCentre (r.getWidth(), 8.0f), outLevel, primary);
+    }
+
+    // ---------------- status bar ----------------
+    g.setColour (bgDeep);
+    g.fillRect (statusBar);
+    g.setColour (border);
+    g.drawHorizontalLine (statusBar.getY(), 0.0f, (float) getWidth());
+    auto sb = statusBar.reduced (18, 0);
+    const bool busy = status.startsWith ("stacking") || status.startsWith ("reading");
+    juce::Path sd; sd.addEllipse ((float) sb.getX(), (float) sb.getCentreY() - 3.5f, 7.0f, 7.0f);
+    const auto sc = busy ? warning : take.isEmpty() ? muted : success;
+    if (! take.isEmpty()) glowPath (g, sd, sc, 6, 0.8f);
+    g.setColour (sc);
+    g.fillPath (sd);
+    g.setColour (muted);
+    g.setFont (ui (11.0f, Weight::Medium));
+    g.drawText (status, sb.withTrimmedLeft (16).withTrimmedRight (330), juce::Justification::centredLeft);
+    g.setColour (faint);
+    g.drawText (juce::String ("v") + SUBHARM_VERSION, sb.withTrimmedRight (300), juce::Justification::centredRight);
 }
 
 void SubHarmEditor::resized()
 {
-    auto full = getLocalBounds();
-    toolbar = full.removeFromBottom (30);
+    auto r = getLocalBounds();
+    topBar = r.removeFromTop (72);
+    statusBar = r.removeFromBottom (34);
     {
-        auto tb = toolbar.reduced (kEar + 12, 4);
-        folderButton.setBounds (tb.removeFromRight (160));
+        auto sb = statusBar.reduced (18, 5);
+        folderButton.setBounds (sb.removeFromRight (130));
+        sb.removeFromRight (8);
+        exportButton.setBounds (sb.removeFromRight (140));
     }
-    auto r = full.reduced (kEar + 12, 12);
-    headerArea = r.removeFromTop (54);
     {
-        auto h = headerArea;
-        nameplate = h.removeFromLeft (270).withSizeKeepingCentre (262, 50);
-        h.removeFromLeft (20);
-        recordButton.setBounds (h.removeFromLeft (200).withSizeKeepingCentre (200, 40));
-        h.removeFromLeft (14);
-        leadThru.setBounds (h.removeFromRight (110).withSizeKeepingCentre (110, 30));
-        h.removeFromRight (12);
-        vuArea = h.removeFromRight (120);
-        h.removeFromRight (14);
-        songDisplay = h.withSizeKeepingCentre (h.getWidth(), 44);
+        auto t = topBar.reduced (20, 0);
+        logoArea = t.removeFromLeft (180).withSizeKeepingCentre (180, 40);
+        t.removeFromLeft (24);
+        keyBox.setBounds (t.removeFromLeft (230).withSizeKeepingCentre (230, 34).translated (0, 7));
+        t.removeFromLeft (14);
+        bpmArea = t.removeFromLeft (104).withSizeKeepingCentre (104, 46);
+        t.removeFromLeft (8);
+        takeArea = t.removeFromLeft (96).withSizeKeepingCentre (96, 46);
+        leadThru.setBounds (t.removeFromRight (110).withSizeKeepingCentre (110, 30));
+        t.removeFromRight (16);
+        recordButton.setBounds (t.removeFromRight (190).withSizeKeepingCentre (190, 38));
+        t.removeFromRight (20);
+        const int scw = juce::jmin (180, juce::jmax (60, t.getWidth()));
+        scArea = t.removeFromRight (scw).withSizeKeepingCentre (scw, 30);
     }
-    r.removeFromTop (10);
 
-    partsCard = r.removeFromTop ((int) (r.getHeight() * 0.40f));
-    timeline.setBounds (partsCard.reduced (12).withTrimmedTop (30));
+    auto body = r.reduced (16, 14);
+    songPanel = body.removeFromTop ((int) (body.getHeight() * 0.50f));
+    body.removeFromTop (12);
     {
-        auto zr = juce::Rectangle<int> (partsCard.getRight() - 140, partsCard.getY() + 9, 126, 26);
-        fitButton.setBounds (zr.removeFromRight (50));
-        zr.removeFromRight (4);
+        timeline.setBounds (songPanel.reduced (12).withTrimmedTop (24));
+        auto zr = juce::Rectangle<int> (songPanel.getRight() - 12 - 132, songPanel.getY() + 6, 132, 24);
+        fitButton.setBounds (zr.removeFromRight (52));
+        zr.removeFromRight (6);
         zoomIn.setBounds (zr.removeFromRight (34));
-        zr.removeFromRight (4);
+        zr.removeFromRight (6);
         zoomOut.setBounds (zr.removeFromRight (34));
     }
-    r.removeFromTop (10);
 
-    auto left = r.removeFromLeft ((int) (r.getWidth() * 0.5f));
-    r.removeFromLeft (10);
-    stacksCard = r;
+    const int gap = 12;
+    const int w = body.getWidth() - 3 * gap;
+    linesPanel = body.removeFromLeft ((int) (w * 0.29f));
+    body.removeFromLeft (gap);
+    perfPanel = body.removeFromLeft ((int) (w * 0.25f));
+    body.removeFromLeft (gap);
+    outPanel = body.removeFromLeft ((int) (w * 0.17f));
+    body.removeFromLeft (gap);
+    stacksPanel = body;
 
-    voicesCard = left.removeFromTop (92);
-    {
-        auto c = voicesCard.reduced (16).withTrimmedTop (40);
-        const int w = (c.getWidth() - 24) / 3;
-        keyBox.setBounds (c.removeFromLeft (w));
-        c.removeFromLeft (12);
-        crewBox.setBounds (c.removeFromLeft (w));
-        c.removeFromLeft (12);
-        deliveryBox.setBounds (c);
-    }
-    left.removeFromTop (10);
-    stackCard = left.removeFromBottom (124);
-    {
-        auto c = stackCard.reduced (16).withTrimmedTop (28);
-        stackInfo.setBounds (c.removeFromBottom (18));
-        c.removeFromBottom (4);
-        stackButton.setBounds (c);
-    }
-    left.removeFromBottom (10);
-    singCard = left;
-    {
-        auto c = singCard.reduced (16).withTrimmedTop (32);
-        const int rowH = juce::jlimit (22, 34, c.getHeight() / 5 - 5);
-        // lines: two rows (6 + 5)
-        for (int rowIdx = 0; rowIdx < 2; ++rowIdx)
+    {   // lines: 2 columns of tokens + presets
+        auto c = linesPanel.reduced (14).withTrimmedTop (24);
+        auto presets = c.removeFromBottom (28);
+        c.removeFromBottom (22);
+        const int pw = (presets.getWidth() - 12) / 3;
+        for (auto* b : presetButtons) { b->setBounds (presets.removeFromLeft (pw)); presets.removeFromLeft (6); }
+        const int rows = 6;
+        const int rowH = juce::jmin (32, (c.getHeight() - (rows - 1) * 6) / rows);
+        const int colW = (c.getWidth() - 8) / 2;
+        for (int i = 0; i < lineButtons.size(); ++i)
         {
-            auto row = c.removeFromTop (rowH);
-            row.removeFromLeft (74);
-            const int first = rowIdx == 0 ? 0 : 6, count = rowIdx == 0 ? 6 : 5;
-            const int bw = row.getWidth() / 6;
-            for (int i = 0; i < count; ++i) lineButtons[first + i]->setBounds (row.removeFromLeft (bw).reduced (2, 0));
-            c.removeFromTop (4);
-        }
-        {
-            auto row = c.removeFromTop (rowH);
-            row.removeFromLeft (84);
-            const int bw = row.getWidth() / 5;
-            for (auto* b : presetButtons) b->setBounds (row.removeFromLeft (bw).reduced (2, 2));
-            c.removeFromTop (8);
-        }
-        for (auto* s : { &flavourSeg, &humanizeSeg })
-        {
-            auto row = c.removeFromTop (rowH);
-            row.removeFromLeft (84);
-            s->setBounds (row);
-            c.removeFromTop (4);
+            const int col = i % 2, row = i / 2;
+            lineButtons[i]->setBounds (c.getX() + col * (colW + 8), c.getY() + row * (rowH + 6), colW, rowH);
         }
     }
-
-    {
-        auto c = stacksCard.reduced (14).withTrimmedTop (32);
-        auto bottom = c.removeFromBottom (112);
-        c.removeFromBottom (8);
+    {   // performance
+        auto c = perfPanel.reduced (14).withTrimmedTop (24);
+        const int fieldH = 32;
+        c.removeFromTop (16);
+        flavourSeg.setBounds (c.removeFromTop (fieldH));
+        c.removeFromTop (26);
+        humanizeSeg.setBounds (c.removeFromTop (fieldH));
+        c.removeFromTop (26);
+        auto row = c.removeFromTop (fieldH);
+        crewBox.setBounds (row.removeFromLeft (row.getWidth() / 2 - 4));
+        row.removeFromLeft (8);
+        deliveryBox.setBounds (row);
+    }
+    {   // output
+        auto c = outPanel.reduced (12).withTrimmedTop (24);
+        outMeterArea = c.removeFromBottom (30);
+        c.removeFromBottom (6);
+        const int big = juce::jmin (c.getWidth(), (int) (c.getHeight() * 0.56f));
+        sauceKnob.setBounds (c.removeFromTop (big).withSizeKeepingCentre (big, big));
+        c.removeFromTop (14);
+        const int sm = juce::jmax (40, juce::jmin (c.getWidth(), c.getHeight() - 6));
+        levelKnob.setBounds (c.removeFromTop (sm).withSizeKeepingCentre (sm, sm));
+    }
+    {   // stacks
+        auto c = stacksPanel.reduced (14).withTrimmedTop (24);
+        stackButton.setBounds (c.removeFromTop (44));
+        c.removeFromTop (4);
+        stackInfo.setBounds (c.removeFromTop (18));
+        c.removeFromTop (6);
+        auto tiles = c.removeFromBottom (52);
+        mixTile.setBounds (tiles.removeFromLeft (tiles.getWidth() / 2 - 5));
+        tiles.removeFromLeft (10);
+        stemsTile.setBounds (tiles);
+        c.removeFromBottom (10);
         stacksViewport.setBounds (c);
         stacksList.setBounds (0, 0, c.getWidth() - 10, juce::jmax (c.getHeight(), stacksList.idealHeight()));
-
-        bottom.removeFromTop (16);
-        bottom = bottom.withTrimmedBottom (4);
-        mixTile.setBounds (bottom.removeFromLeft (100));
-        bottom.removeFromLeft (8);
-        stemsTile.setBounds (bottom.removeFromLeft (100));
-        bottom.removeFromLeft (8);
-        exportButton.setBounds (bottom.removeFromRight (80).withSizeKeepingCentre (80, 28));
-        bottom.removeFromRight (8);
-        outMeter = bottom.removeFromRight (26);
-        sauceKnob.setBounds (bottom.removeFromLeft (bottom.getWidth() / 2));
-        levelKnob.setBounds (bottom);
     }
 }
 
 void SubHarmEditor::refresh()
 {
-    {
-        juce::String st;
-        const auto& tk = proc.getTake();
-        if (tk.isEmpty()) st = "ready: set the side chain, then record";
-        else if (! tk.analysed) st = "reading chords, key and tempo";
-        else
-        {
-            int busy = 0;
-            for (const auto& s : proc.getStacks()) busy += s->state.load() < StackEntry::Done ? 1 : 0;
-            st = busy > 0 ? juce::String ("stacking ") + juce::String (busy) + (busy == 1 ? " part" : " parts")
-                          : juce::String (proc.getStacks().size()) + " stacks on " + juce::String (proc.getParts().size()) + " parts";
-        }
-        if (st != status) { status = st; repaint (toolbar); }
-    }
     using RS = SubHarmProcessor::RecState;
+    const bool standalone = proc.wrapperType == juce::AudioProcessor::wrapperType_Standalone;
     switch (proc.getRecState())
     {
-        case RS::Armed:     recordButton.setButtonText (proc.wrapperType == juce::AudioProcessor::wrapperType_Standalone ? "STARTING..." : "ARMED - PRESS PLAY"); recordButton.setToggleState (true, juce::dontSendNotification); break;
-        case RS::Recording: recordButton.setButtonText ("RECORDING " + juce::String (proc.getRecordedSeconds(), 0) + "s - STOP"); recordButton.setToggleState (true, juce::dontSendNotification); break;
+        case RS::Armed:
+            recordButton.setButtonText (standalone ? "STARTING" : "ARMED  |  PRESS PLAY");
+            recordButton.setToggleState (true, juce::dontSendNotification);
+            break;
+        case RS::Recording:
+            recordButton.setButtonText ("REC " + juce::String ((int) proc.getRecordedSeconds()) + "s  |  STOP");
+            recordButton.setToggleState (true, juce::dontSendNotification);
+            break;
         case RS::Idle:
         case RS::Finished:
         default:
@@ -520,41 +594,60 @@ void SubHarmEditor::refresh()
     const int pending = proc.numPendingParts();
     const bool anyLine = proc.currentSettings().lines != 0;
     stackButton.setEnabled (! take.isEmpty() && take.analysed && anyLine && (pending > 0 || proc.selectedPart > 0));
-    if (take.isEmpty()) stackInfo.setText ("record a take first", juce::dontSendNotification);
-    else if (! take.analysed) stackInfo.setText ("reading the song...", juce::dontSendNotification);
-    else if (! anyLine) stackInfo.setText ("pick at least one line", juce::dontSendNotification);
-    else if (proc.getParts().empty()) stackInfo.setText ("draw a part on your vocal", juce::dontSendNotification);
-    else if (pending > 0) stackInfo.setText (juce::String (pending) + (pending == 1 ? " new part to stack" : " new parts to stack"), juce::dontSendNotification);
-    else stackInfo.setText (juce::String::fromUTF8 ("all parts stacked  ·  click to re-stack the selected part with these settings"), juce::dontSendNotification);
+    juce::String info;
+    if (take.isEmpty()) info = "record a take first";
+    else if (! take.analysed) info = "reading the song...";
+    else if (! anyLine) info = "pick at least one line";
+    else if (proc.getParts().empty()) info = "draw a part on your vocal";
+    else if (pending > 0) info = juce::String (pending) + (pending == 1 ? " new part to stack" : " new parts to stack");
+    else info = "re-stacks the selected part with these settings";
+    stackInfo.setText (info, juce::dontSendNotification);
+
+    {
+        juce::String st;
+        if (take.isEmpty()) st = standalone ? "Ready. Inputs 1/2 = vocal, 3/4 = side chain (beat). Hit RECORD."
+                                            : "Ready. Set SubHarm's side chain to your beat, hit RECORD THIS TRACK and press play.";
+        else if (! take.analysed) st = "reading chords, key and tempo...";
+        else
+        {
+            int busy = 0;
+            for (const auto& s : proc.getStacks()) busy += s->state.load() < StackEntry::Done ? 1 : 0;
+            st = busy > 0 ? juce::String ("stacking ") + juce::String (busy) + (busy == 1 ? " part..." : " parts...")
+                          : juce::String ((int) proc.getStacks().size()) + " stacks on " + juce::String ((int) proc.getParts().size()) + " parts"
+                                + dot() + juce::String (take.key.name()) + (take.bpm > 0 ? dot() + juce::String (take.bpm, 1) + " BPM" : juce::String());
+        }
+        if (st != status) { status = st; repaint (statusBar); }
+    }
 
     stacksList.setBounds (0, 0, stacksViewport.getWidth() - 10, juce::jmax (stacksViewport.getHeight(), stacksList.idealHeight()));
     stacksList.repaint();
     mixTile.repaint();
     stemsTile.repaint();
-    repaint (songDisplay);
+    repaint (topBar);
 }
 
 void SubHarmEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 {
     refresh();
-    timeline.repaint();
-    repaint();
+    timeline.invalidate();
 }
 
 void SubHarmEditor::timerCallback()
 {
-    flavourSeg.update(); humanizeSeg.update();
+    flavourSeg.update();
+    humanizeSeg.update();
     if (proc.getRecState() != SubHarmProcessor::RecState::Idle || ++slowTick % 10 == 0) refresh();
     timeline.followPlayhead();
-    // VU ballistics: ~300 ms rise/fall like a real meter; 0 VU ~ -18 dBFS RMS
-    const float db = juce::Decibels::gainToDecibels (proc.getSidechainLevel(), -60.0f);
-    const float target = juce::jlimit (0.0f, 1.05f, (db + 38.0f) / 23.0f);
-    vuNeedle += (target - vuNeedle) * 0.25f;
-    repaint (vuArea.expanded (2));
+
+    const float scDb = juce::Decibels::gainToDecibels (proc.getSidechainLevel(), -60.0f);
+    const float scT = juce::jlimit (0.0f, 1.0f, (scDb + 54.0f) / 54.0f);
+    scLevel = scT > scLevel ? scT : scLevel * 0.88f + scT * 0.12f;
+    repaint (scArea.expanded (2));
+
     const float outDb = juce::Decibels::gainToDecibels (proc.getStackOutLevel(), -60.0f);
-    const float outTarget = juce::jlimit (0.0f, 1.0f, (outDb + 48.0f) / 48.0f);
-    outLevel = outTarget > outLevel ? outTarget : outLevel * 0.9f + outTarget * 0.1f;
-    repaint (outMeter.expanded (4));
+    const float outT = juce::jlimit (0.0f, 1.0f, (outDb + 54.0f) / 54.0f);
+    outLevel = outT > outLevel ? outT : outLevel * 0.88f + outT * 0.12f;
+    repaint (outMeterArea.expanded (2));
 }
 
 } // namespace subharm

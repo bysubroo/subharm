@@ -13,6 +13,7 @@ void TimelineView::clampView()
 
 void TimelineView::fit()
 {
+    dirty = true;
     const double len = juce::jmax (1.0, proc.getTake().lengthSeconds());
     secPerPx = len / juce::jmax (100.0f, getWidth() - laneX() - 4.0f);
     viewStart = 0.0;
@@ -22,6 +23,7 @@ void TimelineView::fit()
 
 void TimelineView::zoom (double factor, double anchor)
 {
+    dirty = true;
     if (anchor < 0) anchor = viewStart + (getWidth() - laneX()) * 0.5 * secPerPx;
     const double ax = (anchor - viewStart) / secPerPx;
     secPerPx = juce::jlimit (0.0005, 1.0, secPerPx / factor);
@@ -47,65 +49,117 @@ double TimelineView::snap (double t) const
     return firstGrid + std::round ((t - firstGrid) / sixteenth) * sixteenth;
 }
 
-void TimelineView::drawWave (juce::Graphics& g, juce::Rectangle<int> r, const std::vector<float>& peaks, juce::Colour c)
+juce::Path TimelineView::wavePath (juce::Rectangle<int> r, const std::vector<float>& peaks) const
 {
+    juce::Path p;
     const auto& take = proc.getTake();
-    if (peaks.empty()) return;
+    if (peaks.empty()) return p;
     const double peakSec = Take::kPeakBlock / take.sampleRate;
-    const float mid = (float) r.getCentreY(), half = r.getHeight() * 0.46f;
+    const float mid = (float) r.getCentreY(), half = r.getHeight() * 0.48f;
     float maxPeak = 0.02f;
-    for (float p : peaks) maxPeak = std::max (maxPeak, p);
-    g.setColour (c);
+    for (float v : peaks) maxPeak = std::max (maxPeak, v);
+
+    std::vector<float> h ((size_t) r.getWidth(), 0.0f);
     for (int x = r.getX(); x < r.getRight(); ++x)
     {
         const double t0 = xToTime ((float) x), t1 = xToTime ((float) x + 1.0f);
         if (t1 < 0 || t0 > take.lengthSeconds()) continue;
-        int i0 = juce::jmax (0, (int) (t0 / peakSec)), i1 = juce::jmin ((int) peaks.size() - 1, (int) (t1 / peakSec));
+        const int i0 = juce::jmax (0, (int) (t0 / peakSec)), i1 = juce::jmin ((int) peaks.size() - 1, (int) (t1 / peakSec));
         float m = 0;
         for (int i = i0; i <= i1; ++i) m = std::max (m, peaks[(size_t) i]);
-        const float h = std::sqrt (m / maxPeak) * half;   // sqrt: quiet bits stay visible
-        g.fillRect ((float) x, mid - h, 1.0f, juce::jmax (1.0f, 2 * h));
+        h[(size_t) (x - r.getX())] = std::sqrt (m / maxPeak) * half;   // sqrt: quiet bits stay visible
     }
+    p.startNewSubPath ((float) r.getX(), mid);
+    for (int x = 0; x < r.getWidth(); ++x) p.lineTo ((float) (r.getX() + x), mid - h[(size_t) x]);
+    for (int x = r.getWidth() - 1; x >= 0; --x) p.lineTo ((float) (r.getX() + x), mid + h[(size_t) x]);
+    p.closeSubPath();
+    return p;
 }
 
 void TimelineView::paint (juce::Graphics& g)
 {
     using namespace theme;
     const auto& take = proc.getTake();
-    recess (g, getLocalBounds().toFloat().reduced (0.5f), 5.0f, panel);
 
-    auto label = [&] (juce::Rectangle<int> r, const char* t)
+    if (take.isEmpty())   // empty state is live (record status changes)
     {
-        g.setColour (faint);
-        g.setFont (font (9.0f, true).withExtraKerningFactor (0.1f));
-        g.drawText (t, 8, r.getY(), (int) laneX() - 12, r.getHeight(), juce::Justification::centredLeft);
-    };
-    label (vocalArea(), "VOCAL");
-    label (beatArea(), "BEAT");
-    label (chordArea(), "CHORDS");
-
-    for (auto r : { vocalArea(), beatArea(), chordArea() })
-    {
-        g.setColour (bg);
-        g.fillRoundedRectangle (r.toFloat(), 3.0f);
-    }
-
-    if (take.isEmpty())
-    {
-        g.setColour (dim);
-        g.setFont (font (14.0f));
-        juce::String msg;
+        g.setColour (bgDeep);
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
+        auto r = getLocalBounds().reduced (40);
+        juce::String head, sub;
         switch (proc.getRecState())
         {
-            case SubHarmProcessor::RecState::Armed:     msg = "Armed: press play in your DAW. Stop the DAW when the part is done."; break;
-            case SubHarmProcessor::RecState::Recording: msg = "Recording... " + juce::String (proc.getRecordedSeconds(), 1) + " s"; break;
+            case SubHarmProcessor::RecState::Armed:
+                head = "Armed"; sub = "Press play in your DAW. Stop the DAW when the part is done."; break;
+            case SubHarmProcessor::RecState::Recording:
+                head = "Recording  " + juce::String (proc.getRecordedSeconds(), 1) + " s"; sub = "Vocal + side chain are coming in as one take."; break;
             case SubHarmProcessor::RecState::Idle:
             case SubHarmProcessor::RecState::Finished:
-            default: msg = "Set SubHarm's side chain to your beat (or a chords bus), hit RECORD THIS TRACK and press play.";
+            default:
+                head = "Record your lead with the beat on the side chain";
+                sub = "SubHarm reads the chords, key and tempo, then stacks harmonies over them.";
         }
-        g.drawFittedText (msg, vocalArea().reduced (20), juce::Justification::centred, 2);
+        g.setColour (text);
+        g.setFont (ui (17.0f, Weight::Bold));
+        g.drawText (head, r.withTrimmedBottom (r.getHeight() / 2), juce::Justification::centredBottom);
+        g.setColour (muted);
+        g.setFont (ui (12.5f, Weight::Medium));
+        g.drawText (sub, r.withTrimmedTop (r.getHeight() / 2 + 6), juce::Justification::centredTop);
         return;
     }
+
+    if (dirty || cache.getWidth() != getWidth() || cache.getHeight() != getHeight())
+    {
+        cache = juce::Image (juce::Image::ARGB, juce::jmax (1, getWidth()), juce::jmax (1, getHeight()), true);
+        juce::Graphics cg (cache);
+        renderStatic (cg);
+        dirty = false;
+    }
+    g.drawImageAt (cache, 0, 0);
+
+    const auto va = vocalArea();
+    if (drag == Drag::Create)
+    {
+        const float x0 = timeToX (std::min (dragAnchor, dragNow)), x1 = timeToX (std::max (dragAnchor, dragNow));
+        auto r = juce::Rectangle<float> (x0, (float) va.getY(), x1 - x0, (float) va.getHeight());
+        g.setColour (primary.withAlpha (0.16f));
+        g.fillRect (r);
+        g.setColour (primary);
+        g.drawRect (r, 1.0f);
+    }
+
+    const double ph = proc.getPlayheadInTake();
+    if (proc.isHostPlaying() && ph >= 0 && ph <= take.lengthSeconds())
+    {
+        const float x = timeToX (ph);
+        if (x >= laneX() && x <= getWidth())
+        {
+            juce::Path line;
+            line.addRectangle (x - 0.75f, (float) rulerArea().getY(), 1.5f, (float) (chordArea().getBottom() - rulerArea().getY()));
+            glowPath (g, line, secondary, 8, 0.9f);
+            g.setColour (secondary);
+            g.fillPath (line);
+        }
+    }
+}
+
+void TimelineView::renderStatic (juce::Graphics& g)
+{
+    using namespace theme;
+    const auto& take = proc.getTake();
+
+    g.setColour (bgDeep);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
+
+    auto laneLabel = [&] (juce::Rectangle<int> r, const char* t)
+    {
+        g.setColour (faint);
+        g.setFont (label (8.5f));
+        g.drawText (t, 10, r.getY(), (int) laneX() - 14, r.getHeight(), juce::Justification::centredLeft);
+    };
+    laneLabel (vocalArea(), "VOCAL");
+    laneLabel (beatArea(), "BEAT");
+    laneLabel (chordArea(), "CHORDS");
 
     // ---- bar ruler + grid ----
     const auto ruler = rulerArea();
@@ -126,98 +180,109 @@ void TimelineView::paint (juce::Graphics& g)
             const long beatIdx = (long) std::llround (firstBeatPpq) + k;
             const bool barLine = beatIdx % bpb == 0;
             if (! barLine && dense) continue;
-            g.setColour (barLine ? line.brighter (0.3f) : line);
+            g.setColour (barLine ? border.brighter (0.15f) : border.withAlpha (0.45f));
             g.drawVerticalLine ((int) x, (float) vocalArea().getY(), (float) chordArea().getBottom());
             if (barLine)
             {
-                g.setColour (dim);
-                g.setFont (font (10.0f));
-                g.drawText (juce::String (beatIdx / bpb + 1), (int) x + 3, ruler.getY(), 40, ruler.getHeight(), juce::Justification::centredLeft);
+                g.setColour (muted);
+                g.setFont (ui (10.0f, Weight::Bold));
+                g.drawText (juce::String (beatIdx / bpb + 1), (int) x + 4, ruler.getY(), 40, ruler.getHeight(), juce::Justification::centredLeft);
             }
         }
     }
 
-    // ---- waves ----
-    drawWave (g, vocalArea().reduced (0, 8), take.vocalPeaks, wave.withAlpha (0.85f));
-    if (take.hasSidechain) drawWave (g, beatArea().reduced (0, 4), take.beatPeaks, faint);
-    else
-    {
-        g.setColour (faint); g.setFont (font (11.0f));
-        g.drawText ("no side chain recorded: harmonies follow the key", beatArea(), juce::Justification::centred);
-    }
-
-    // ---- parts ----
+    // ---- vocal wave: muted outside parts, part colour + glow inside ----
     const auto va = vocalArea();
+    const auto wp = wavePath (va.reduced (0, 6), take.vocalPeaks);
     g.saveState();
     g.reduceClipRegion (va);
+    g.setColour (wave.withAlpha (0.55f));
+    g.fillPath (wp);
     for (const auto& p : proc.getParts())
     {
         const float x0 = timeToX (p.start), x1 = timeToX (p.end);
         auto r = juce::Rectangle<float> (x0, (float) va.getY(), x1 - x0, (float) va.getHeight());
-        auto c = partColour (p.colourIndex);
+        const auto c = partColour (p.colourIndex);
         const bool sel = p.id == proc.selectedPart;
-        g.setColour (c.withAlpha (sel ? 0.22f : 0.13f));
+        g.setColour (c.withAlpha (sel ? 0.12f : 0.07f));
         g.fillRect (r);
-        g.setColour (c.withAlpha (sel ? 1.0f : 0.7f));
-        g.drawRect (r, sel ? 2.0f : 1.0f);
-        g.fillRect (r.getX(), r.getY(), 3.0f, r.getHeight());
-        g.fillRect (r.getRight() - 3.0f, r.getY(), 3.0f, r.getHeight());
+        g.saveState();
+        g.reduceClipRegion (r.toNearestInt());
+        glowPath (g, wp, c, 12, sel ? 0.5f : 0.3f);
+        juce::ColourGradient wg (c.withAlpha (0.35f), 0, (float) va.getY(), c.withAlpha (0.35f), 0, (float) va.getBottom(), false);
+        wg.addColour (0.5, c.withAlpha (0.85f));
+        g.setGradientFill (wg);
+        g.fillPath (wp);
+        g.setColour (c.brighter (0.4f));
+        g.strokePath (wp, juce::PathStrokeType (1.0f));
+        g.restoreState();
+        // header strip + handles
+        g.setColour (c);
+        g.fillRect (r.getX(), r.getY(), r.getWidth(), 2.0f);
+        g.setColour (c.withAlpha (sel ? 1.0f : 0.6f));
+        g.drawRect (r, sel ? 1.5f : 1.0f);
+        g.fillRoundedRectangle (r.getX() - 1.0f, r.getCentreY() - 12.0f, 3.0f, 24.0f, 1.5f);
+        g.fillRoundedRectangle (r.getRight() - 2.0f, r.getCentreY() - 12.0f, 3.0f, 24.0f, 1.5f);
 
-        g.setFont (font (12.0f, true));
-        g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + (p.id - 1) % 26)), (int) r.getX() + 7, (int) r.getY() + 3, 20, 16, juce::Justification::centredLeft);
-        g.setColour (text.withAlpha (0.8f));
-        g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")), (int) r.getRight() - 20, (int) r.getY() + 2, 16, 16, juce::Justification::centred);
+        auto tag = juce::Rectangle<float> (r.getX() + 6.0f, r.getY() + 7.0f, 20.0f, 18.0f);
+        g.setColour (c);
+        g.fillRoundedRectangle (tag, 4.0f);
+        g.setColour (bgDeep);
+        g.setFont (ui (11.0f, Weight::ExtraBold));
+        g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + (p.id - 1) % 26)), tag, juce::Justification::centred);
 
         bool stacked = false;
         for (const auto& s : proc.getStacks()) stacked |= s->partId == p.id && s->state.load() == StackEntry::Done;
-        if (stacked)
-        {
-            g.setColour (c);
-            g.fillEllipse (r.getX() + 24.0f, r.getY() + 7.0f, 7.0f, 7.0f);
-        }
-    }
-    if (drag == Drag::Create)
-    {
-        const float x0 = timeToX (std::min (dragAnchor, dragNow)), x1 = timeToX (std::max (dragAnchor, dragNow));
-        g.setColour (accent.withAlpha (0.18f));
-        g.fillRect (x0, (float) va.getY(), x1 - x0, (float) va.getHeight());
+        g.setColour (stacked ? c : muted);
+        g.setFont (label (8.5f));
+        g.drawText (stacked ? "STACKED" : "NEW", (int) tag.getRight() + 6, (int) tag.getY(), 70, (int) tag.getHeight(), juce::Justification::centredLeft);
+
+        const float cx = r.getRight() - 14.0f, cy = r.getY() + 16.0f;   // remove
+        g.setColour (text.withAlpha (0.7f));
+        g.drawLine (cx - 3.5f, cy - 3.5f, cx + 3.5f, cy + 3.5f, 1.4f);
+        g.drawLine (cx - 3.5f, cy + 3.5f, cx + 3.5f, cy - 3.5f, 1.4f);
     }
     g.restoreState();
+
+    // ---- beat ----
+    const auto ba = beatArea();
+    if (take.hasSidechain)
+    {
+        g.setColour (faint.withAlpha (0.8f));
+        g.fillPath (wavePath (ba.reduced (0, 4), take.beatPeaks));
+    }
+    else
+    {
+        g.setColour (faint);
+        g.setFont (ui (11.0f, Weight::Medium));
+        g.drawText ("no side chain recorded: harmonies follow the key", ba, juce::Justification::centred);
+    }
 
     // ---- chords ----
     const auto ca = chordArea();
     if (proc.isAnalysing())
     {
-        g.setColour (dim); g.setFont (font (11.0f));
+        g.setColour (muted);
+        g.setFont (ui (11.0f, Weight::Medium));
         g.drawText ("reading chords, key and tempo...", ca, juce::Justification::centred);
     }
     g.saveState();
     g.reduceClipRegion (ca);
-    for (size_t i = 0; i < take.chords.size(); ++i)
+    for (const auto& c : take.chords)
     {
-        const auto& c = take.chords[i];
         const float x0 = timeToX (c.start), x1 = timeToX (c.end);
         if (x1 < ca.getX() || x0 > ca.getRight()) continue;
-        auto r = juce::Rectangle<float> (x0 + 1, (float) ca.getY() + 2, x1 - x0 - 2, (float) ca.getHeight() - 4);
-        g.setColour (c.chord.isNoChord() ? bg.brighter (0.05f) : juce::Colour (0xff2a2722));
-        g.fillRoundedRectangle (r, 3.0f);
-        g.setColour (c.chord.isNoChord() ? faint : text);
-        g.setFont (font (12.0f, true));
-        g.drawText (c.chord.name(), r.reduced (4, 0), juce::Justification::centredLeft, true);
+        auto r = juce::Rectangle<float> (x0 + 1.5f, (float) ca.getY() + 3, x1 - x0 - 3.0f, (float) ca.getHeight() - 6);
+        const bool nc = c.chord.isNoChord();
+        g.setColour (nc ? surface : surfaceHi);
+        g.fillRoundedRectangle (r, 5.0f);
+        g.setColour (nc ? border : primary.withAlpha (0.45f));
+        g.drawRoundedRectangle (r, 5.0f, 1.0f);
+        g.setColour (nc ? faint : text);
+        g.setFont (ui (12.5f, Weight::ExtraBold));
+        g.drawText (c.chord.name(), r.reduced (8, 0), juce::Justification::centredLeft, true);
     }
     g.restoreState();
-
-    // ---- playhead ----
-    const double ph = proc.getPlayheadInTake();
-    if (proc.isHostPlaying() && ph >= 0 && ph <= take.lengthSeconds())
-    {
-        const float x = timeToX (ph);
-        if (x >= laneX())
-        {
-            g.setColour (text);
-            g.drawVerticalLine ((int) x, 0.0f, (float) getHeight());
-        }
-    }
 }
 
 void TimelineView::mouseMove (const juce::MouseEvent& e)
@@ -262,10 +327,10 @@ void TimelineView::mouseDown (const juce::MouseEvent& e)
     for (const auto& p : proc.getParts())
     {
         const float x0 = timeToX (p.start), x1 = timeToX (p.end);
-        if (e.x > x1 - 22 && e.x < x1 - 4 && e.y < vocalArea().getY() + 20) { proc.removePart (p.id); repaint(); return; }
+        if (e.x > x1 - 24 && e.x < x1 - 4 && e.y < vocalArea().getY() + 28) { proc.removePart (p.id); repaint(); return; }
         if (std::abs (e.x - x0) < 6) { drag = Drag::ResizeStart; dragPart = p.id; return; }
         if (std::abs (e.x - x1) < 6) { drag = Drag::ResizeEnd; dragPart = p.id; return; }
-        if (e.x > x0 && e.x < x1) { proc.selectedPart = p.id; proc.sendChangeMessage(); repaint(); return; }
+        if (e.x > x0 && e.x < x1) { proc.selectedPart = p.id; proc.sendChangeMessage(); invalidate(); return; }
     }
     drag = Drag::Create;
     dragAnchor = dragNow = snap (t);
@@ -273,6 +338,7 @@ void TimelineView::mouseDown (const juce::MouseEvent& e)
 
 void TimelineView::mouseDrag (const juce::MouseEvent& e)
 {
+    if (drag != Drag::Create) dirty = true;
     const double t = xToTime ((float) e.x);
     switch (drag)
     {
@@ -299,6 +365,7 @@ void TimelineView::mouseDrag (const juce::MouseEvent& e)
 
 void TimelineView::mouseUp (const juce::MouseEvent&)
 {
+    dirty = true;
     if (drag == Drag::Create)
         proc.addPart (std::min (dragAnchor, dragNow), std::max (dragAnchor, dragNow));
     drag = Drag::None;
@@ -308,6 +375,7 @@ void TimelineView::mouseUp (const juce::MouseEvent&)
 
 void TimelineView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
 {
+    dirty = true;
     if (e.mods.isCtrlDown() || e.mods.isCommandDown())
         zoom (w.deltaY > 0 ? 1.25 : 0.8, xToTime ((float) e.x));
     else

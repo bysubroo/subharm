@@ -217,7 +217,7 @@ int main (int argc, char** argv)
         // ---------- 7. UI snapshot ----------
         proc2->selectedPart = 1;
         std::unique_ptr<juce::AudioProcessorEditor> ed (proc2->createEditorIfNeeded());
-        ed->setSize (1180, 880);
+        ed->setSize (1240, 820);
         pump (200);
         auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         juce::PNGImageFormat png;

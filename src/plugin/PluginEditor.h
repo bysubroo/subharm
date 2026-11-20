@@ -10,11 +10,12 @@
 namespace subharm
 {
 
-// Row of radio buttons bound to a choice parameter.
+// Segmented control bound to a choice parameter.
 class Segment : public juce::Component
 {
 public:
     Segment (juce::RangedAudioParameter& p, juce::StringArray labels);
+    void paint (juce::Graphics&) override;
     void resized() override;
     void update();
 private:
@@ -22,12 +23,14 @@ private:
     juce::OwnedArray<juce::TextButton> buttons;
 };
 
-// MIX / STEMS tile you drag straight onto the DAW timeline.
+// MIX / STEMS pad you drag straight onto the DAW timeline.
 class DragTile : public juce::Component
 {
 public:
     DragTile (SubHarmProcessor& p, bool stems) : proc (p), isStems (stems) { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
     void paint (juce::Graphics&) override;
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
     void mouseDown (const juce::MouseEvent&) override { dragging = false; }
     void mouseDrag (const juce::MouseEvent&) override;
 private:
@@ -42,7 +45,7 @@ public:
     void paint (juce::Graphics&) override;
     void mouseUp (const juce::MouseEvent&) override;
     int idealHeight() const { return juce::jmax (60, (int) proc.getStacks().size() * kRow); }
-    static constexpr int kRow = 44;
+    static constexpr int kRow = 48;
 private:
     SubHarmProcessor& proc;
 };
@@ -62,42 +65,44 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
     void refresh();
-    void drawCard (juce::Graphics&, juce::Rectangle<int>, const juce::String& num, const juce::String& title);
 
     SubHarmProcessor& proc;
     theme::LookAndFeel lnf;
 
-    juce::TextButton recordButton, zoomOut { "-" }, zoomIn { "+" }, fitButton { "FIT" };
+    // top bar
+    juce::TextButton recordButton;
+    juce::ComboBox keyBox;
     juce::ToggleButton leadThru { "Hear lead" };
+    // song
     TimelineView timeline;
-
-    juce::ComboBox keyBox, crewBox, deliveryBox;
+    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, fitButton { "Fit" };
+    // lines
     juce::OwnedArray<juce::TextButton> lineButtons, presetButtons;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> lineAtts;
+    // performance
     Segment flavourSeg, humanizeSeg;
+    juce::ComboBox crewBox, deliveryBox;
+    // output
+    juce::Slider sauceKnob, levelKnob;
+    // stacks
     juce::TextButton stackButton;
     juce::Label stackInfo;
-
     StacksList stacksList;
     juce::Viewport stacksViewport;
     DragTile mixTile, stemsTile;
-    juce::Slider sauceKnob, levelKnob;
-    juce::TextButton exportButton { "Export..." };
+    // status bar
+    juce::TextButton exportButton { "Export to folder" }, folderButton { "Session folder" };
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyAtt, crewAtt, deliveryAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sauceAtt, levelAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> leadAtt;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    int slowTick = 0;
-    static constexpr int kEar = 26;
-    juce::Image faceplate;
-    float vuNeedle = 0.0f;
-    juce::Rectangle<int> vuArea, songDisplay, nameplate, toolbar, outMeter;
-    float outLevel = 0.0f;
+    juce::Rectangle<int> topBar, statusBar, songPanel, linesPanel, perfPanel, outPanel, stacksPanel;
+    juce::Rectangle<int> logoArea, bpmArea, takeArea, scArea, outMeterArea;
+    float scLevel = 0.0f, outLevel = 0.0f;
     juce::String status;
-    juce::TextButton folderButton;
-    juce::Rectangle<int> headerArea, partsCard, voicesCard, singCard, stackCard, stacksCard, ledArea, linesArea;
+    int slowTick = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SubHarmEditor)
 };

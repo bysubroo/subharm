@@ -11,6 +11,6 @@ if (SUBHARM_BUILD_PLUGIN)
     target_compile_definitions (subharm_host_test PRIVATE
         JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 SUBHARM_VERSION="${PROJECT_VERSION}")
     target_link_libraries (subharm_host_test PRIVATE
-        subharm_core juce::juce_audio_utils juce::juce_audio_formats juce::juce_audio_processors juce::juce_gui_basics
+        subharm_core SubHarmAssets juce::juce_audio_utils juce::juce_audio_formats juce::juce_audio_processors juce::juce_gui_basics
         juce::juce_recommended_config_flags)
 endif()

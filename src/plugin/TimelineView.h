@@ -17,6 +17,8 @@ public:
     void mouseMove (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
+    void resized() override { dirty = true; }
+    void invalidate() { dirty = true; repaint(); }
     void zoom (double factor, double anchorSeconds = -1.0);
     void fit();
     void followPlayhead();
@@ -24,14 +26,17 @@ public:
 private:
     double xToTime (float x) const { return viewStart + (x - laneX()) * secPerPx; }
     float timeToX (double t) const { return laneX() + (float) ((t - viewStart) / secPerPx); }
-    float laneX() const { return 70.0f; }
-    juce::Rectangle<int> rulerArea() const  { return { (int) laneX(), 0, getWidth() - (int) laneX(), 18 }; }
-    juce::Rectangle<int> vocalArea() const  { return { (int) laneX(), 20, getWidth() - (int) laneX(), getHeight() - 20 - 46 - 30 - 6 }; }
-    juce::Rectangle<int> beatArea() const   { auto v = vocalArea(); return { v.getX(), v.getBottom() + 3, v.getWidth(), 46 }; }
-    juce::Rectangle<int> chordArea() const  { auto b = beatArea(); return { b.getX(), b.getBottom() + 3, b.getWidth(), 30 }; }
+    float laneX() const { return 64.0f; }
+    juce::Rectangle<int> rulerArea() const  { return { (int) laneX(), 2, getWidth() - (int) laneX(), 18 }; }
+    juce::Rectangle<int> vocalArea() const  { return { (int) laneX(), 22, getWidth() - (int) laneX() - 6, getHeight() - 22 - 44 - 34 - 10 }; }
+    juce::Rectangle<int> beatArea() const   { auto v = vocalArea(); return { v.getX(), v.getBottom() + 4, v.getWidth(), 44 }; }
+    juce::Rectangle<int> chordArea() const  { auto b = beatArea(); return { b.getX(), b.getBottom() + 4, b.getWidth(), 34 }; }
     void clampView();
     double snap (double t) const;
-    void drawWave (juce::Graphics&, juce::Rectangle<int>, const std::vector<float>& peaks, juce::Colour);
+    juce::Path wavePath (juce::Rectangle<int>, const std::vector<float>& peaks) const;
+    void renderStatic (juce::Graphics&);
+    juce::Image cache;
+    bool dirty = true;
     void chordMenu (int segIndex, double atTime);
 
     enum class Drag { None, Create, ResizeStart, ResizeEnd, Pan };

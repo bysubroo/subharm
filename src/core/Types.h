@@ -51,11 +51,20 @@ struct NoteSeg
 enum class StackSize { Short = 0, Tall, Full };       // presets for the line matrix
 
 // Every line is rendered as an L + R pair (two takes of the same part).
+// (values are stored in projects: only ever append)
 enum class LineType : int
 {
-    Unison = 0, ThirdUp, ThirdDown, FifthUp, FifthDown, OctaveUp, OctaveDown, ChordHigh, ChordLow, Count
+    Double = 0,         // DOUBLE: your melody again (Revoice-style double)
+    ThirdUp, ThirdDown, FifthUp, FifthDown, OctaveUp, OctaveDown, ChordHigh, ChordLow,
+    PedalRoot,          // UNIS: one constant note on the key's tonic (F# in F# minor)
+    PedalFifth,         // UNIS 5TH: one constant note on the key's 5th (G in C major)
+    Count
 };
 constexpr int kNumLineTypes = (int) LineType::Count;
+// order used in the UI and for stems
+constexpr LineType kLineDisplayOrder[kNumLineTypes] = {
+    LineType::PedalRoot, LineType::PedalFifth, LineType::Double, LineType::ThirdUp, LineType::ThirdDown, LineType::FifthUp,
+    LineType::FifthDown, LineType::OctaveUp, LineType::OctaveDown, LineType::ChordHigh, LineType::ChordLow };
 const char* lineName (LineType);          // "3RD UP", "CHORD HARMONY LOW", ...
 uint32_t presetLines (StackSize);         // bit mask of LineType
 inline bool hasLine (uint32_t mask, LineType t) { return (mask >> (int) t) & 1u; }

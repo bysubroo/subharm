@@ -168,20 +168,39 @@ namespace
 std::vector<VoiceLine> generateHarmony (const std::vector<NoteSeg>& notes, const std::vector<ChordSeg>& chords,
                                         double partOffset, const Key& key, const StackSettings& st)
 {
-    const uint32_t mask = st.lines != 0 ? st.lines : presetLines (StackSize::Full);
+    const uint32_t mask = st.lines != 0 ? st.lines : presetLines (StackSize::Tall);
     const bool gospel = st.flavour == Flavour::Gospel;
     const bool rnb = st.flavour == Flavour::RnB;
     const double extBonus = gospel ? 0.9 : rnb ? 0.55 : st.flavour == Flavour::Pop ? 0.15 : 0.0;
     const double leadSemiClash = gospel ? 1.5 : 3.0;
 
-    std::vector<VoiceLine> lines;
-    for (int ti = 0; ti < kNumLineTypes; ++ti)
+    // Pedal octave: the tonic / 5th nearest to where the lead mostly sings in this part
+    double weighted = 0.0, totalDur = 0.0;
+    for (const auto& n : notes) { weighted += n.midi * (n.end - n.start); totalDur += n.end - n.start; }
+    const double centre = totalDur > 0 ? weighted / totalDur : 60.0;
+    auto pedalPitch = [&] (int pc)
     {
-        const auto type = (LineType) ti;
+        int best = 0; double bestD = 1e9;
+        for (int m = 24; m < 108; ++m)
+            if (((m % 12) + 12) % 12 == pc)
+            {
+                const double d = std::abs (m - centre) + (m > centre ? 0.01 : 0.0);   // ties go down
+                if (d < bestD) { bestD = d; best = m; }
+            }
+        return best;
+    };
+    const int pedalRoot = pedalPitch (key.tonic);
+    const int pedalFifth = pedalPitch ((key.tonic + 7) % 12);
+
+    std::vector<VoiceLine> lines;
+    for (auto type : kLineDisplayOrder)
+    {
         if (! hasLine (mask, type)) continue;
 
         VoiceLine line;
         line.type = type;
+        if (type == LineType::PedalRoot) line.pedalMidi = pedalRoot;
+        if (type == LineType::PedalFifth) line.pedalMidi = pedalFifth;
         line.semis.assign (notes.size(), 0);
 
         int prevPitch = std::numeric_limits<int>::min();
@@ -196,9 +215,10 @@ std::vector<VoiceLine> generateHarmony (const std::vector<NoteSeg>& notes, const
 
             // Very short blips (glides, ornaments, tracking hiccups) keep the previous
             // interval instead of getting a decision of their own: no jumps.
-            if (ni > 0 && connected && (n.end - n.start) < 0.07
-                && (type == LineType::Unison || type == LineType::OctaveUp || type == LineType::OctaveDown
-                    || ! key.contains (notes[ni - 1].midi) || key.contains (lead + line.semis[ni - 1])))
+            const bool fixedInterval = type == LineType::Double || type == LineType::OctaveUp || type == LineType::OctaveDown
+                                       || type == LineType::PedalRoot || type == LineType::PedalFifth;
+            if (! fixedInterval && ni > 0 && connected && (n.end - n.start) < 0.07
+                && (! key.contains (notes[ni - 1].midi) || key.contains (lead + line.semis[ni - 1])))
             {
                 line.semis[ni] = line.semis[ni - 1];
                 prevEnd = n.end;
@@ -209,7 +229,9 @@ std::vector<VoiceLine> generateHarmony (const std::vector<NoteSeg>& notes, const
             int semis = 0;
             switch (type)
             {
-                case LineType::Unison:     semis = 0; break;
+                case LineType::Double:     semis = 0; break;
+                case LineType::PedalRoot:  semis = pedalRoot - lead; break;
+                case LineType::PedalFifth: semis = pedalFifth - lead; break;
                 case LineType::OctaveUp:   semis = 12; break;
                 case LineType::OctaveDown: semis = -12; break;
                 case LineType::ThirdUp:    semis = ladder.shift (lead, +2); break;

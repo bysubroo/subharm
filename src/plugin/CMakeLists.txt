@@ -1,4 +1,4 @@
-set (SUBHARM_FORMATS VST3)
+set (SUBHARM_FORMATS VST3 Standalone)
 if (APPLE)
     list (APPEND SUBHARM_FORMATS AU)
 endif()
@@ -30,7 +30,8 @@ target_compile_definitions (SubHarm PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_DISPLAY_SPLASH_SCREEN=0
+    SUBHARM_VERSION="${PROJECT_VERSION}")
 
 target_link_libraries (SubHarm
     PRIVATE

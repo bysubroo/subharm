@@ -77,7 +77,9 @@ const char* lineName (LineType t)
 {
     switch (t)
     {
-        case LineType::Unison:     return "UNIS";
+        case LineType::Double:     return "DOUBLE";
+        case LineType::PedalRoot:  return "UNIS";
+        case LineType::PedalFifth: return "UNIS 5TH";
         case LineType::ThirdUp:    return "3RD UP";
         case LineType::ThirdDown:  return "3RD DOWN";
         case LineType::FifthUp:    return "5TH UP";
@@ -95,10 +97,12 @@ uint32_t presetLines (StackSize s)
     auto bit = [] (LineType t) { return 1u << (int) t; };
     switch (s)
     {
-        case StackSize::Short: return bit (LineType::ThirdUp) | bit (LineType::ChordLow);
-        case StackSize::Tall:  return bit (LineType::ThirdUp) | bit (LineType::ThirdDown) | bit (LineType::FifthDown);
-        default:               return bit (LineType::Unison) | bit (LineType::ThirdUp) | bit (LineType::ChordHigh)
-                                    | bit (LineType::ThirdDown) | bit (LineType::OctaveDown);
+        case StackSize::Short: return bit (LineType::PedalRoot) | bit (LineType::ThirdUp);
+        case StackSize::Tall:  // "SubRoo": the default stack
+            return bit (LineType::PedalRoot) | bit (LineType::ThirdUp) | bit (LineType::OctaveUp) | bit (LineType::OctaveDown);
+        default:
+            return bit (LineType::Double) | bit (LineType::PedalRoot) | bit (LineType::PedalFifth) | bit (LineType::ThirdUp)
+                 | bit (LineType::ThirdDown) | bit (LineType::OctaveUp) | bit (LineType::OctaveDown) | bit (LineType::ChordHigh);
     }
 }
 

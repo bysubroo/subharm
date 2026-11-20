@@ -1,11 +1,8 @@
-; SubHarm Windows installer (Inno Setup 6)
-; Built by CI:  ISCC /DAppVersion=x.y.z /DSrcDir=<path to SubHarm.vst3> /O<outdir> SubHarm.iss
+; SubHarm Windows installer (Inno Setup 6): VST3 plugin + standalone app.
+; Built by CI:  ISCC /DAppVersion=x.y.z /DVst3Dir=<SubHarm.vst3> /DAppExe=<SubHarm.exe> /O<outdir> SubHarm.iss
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
-#endif
-#ifndef SrcDir
-  #define SrcDir "..\..\build\src\plugin\SubHarm_artefacts\Release\VST3\SubHarm.vst3"
+  #define AppVersion "0.0.0"
 #endif
 
 [Setup]
@@ -15,14 +12,12 @@ AppVersion={#AppVersion}
 AppVerName=SubHarm {#AppVersion}
 AppPublisher=SubRoo
 AppPublisherURL=https://subroo.xyz
-AppComments=Chord-aware vocal harmony stacks (VST3)
-DefaultDirName={commoncf64}\VST3\SubHarm.vst3
+AppComments=Chord-aware vocal harmony stacks (VST3 + standalone)
+DefaultDirName={commonpf64}\SubRoo\SubHarm
 DisableDirPage=yes
 DisableProgramGroupPage=yes
-DisableReadyPage=no
-; keep the uninstaller out of the plugin bundle
-UninstallFilesDir={commonpf64}\SubRoo\SubHarm
-UninstallDisplayName=SubHarm (VST3)
+UninstallDisplayName=SubHarm
+UninstallDisplayIcon={app}\SubHarm.exe
 OutputBaseFilename=SubHarm-{#AppVersion}-Windows-Setup
 Compression=lzma2/max
 SolidCompression=yes
@@ -32,15 +27,23 @@ PrivilegesRequired=admin
 WizardStyle=modern
 CloseApplications=yes
 
-[Files]
-Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+[Tasks]
+Name: "desktopicon"; Description: "Desktop shortcut for the SubHarm app"; Flags: unchecked
 
 [InstallDelete]
-; clean an older version of the bundle before copying the new one
-Type: filesandordirs; Name: "{app}"
+; replace an older plugin bundle completely
+Type: filesandordirs; Name: "{commoncf64}\VST3\SubHarm.vst3"
+
+[Files]
+Source: "{#Vst3Dir}\*"; DestDir: "{commoncf64}\VST3\SubHarm.vst3"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+Name: "{commonprograms}\SubHarm"; Filename: "{app}\SubHarm.exe"
+Name: "{commondesktop}\SubHarm"; Filename: "{app}\SubHarm.exe"; Tasks: desktopicon
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}"
+Type: filesandordirs; Name: "{commoncf64}\VST3\SubHarm.vst3"
 
 [Messages]
-FinishedLabel=SubHarm is installed in the shared VST3 folder.%n%nRescan plugins in your DAW:%n  FL Studio: Options > Manage plugins > Find more plugins%n  Cubase: Studio > VST Plug-in Manager > Rescan
+FinishedLabel=SubHarm is installed:%n  - VST3 plugin in the shared VST3 folder%n  - SubHarm app in the Start menu%n%nRescan plugins in your DAW:%n  FL Studio: Options > Manage plugins > Find more plugins%n  Cubase: Studio > VST Plug-in Manager > Rescan

@@ -3,6 +3,10 @@
 #include "Theme.h"
 #include "TimelineView.h"
 
+#ifndef SUBHARM_VERSION
+ #define SUBHARM_VERSION "dev"
+#endif
+
 namespace subharm
 {
 
@@ -89,7 +93,10 @@ private:
     static constexpr int kEar = 26;
     juce::Image faceplate;
     float vuNeedle = 0.0f;
-    juce::Rectangle<int> vuArea, songDisplay;
+    juce::Rectangle<int> vuArea, songDisplay, nameplate, toolbar, outMeter;
+    float outLevel = 0.0f;
+    juce::String status;
+    juce::TextButton folderButton;
     juce::Rectangle<int> headerArea, partsCard, voicesCard, singCard, stackCard, stacksCard, ledArea, linesArea;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SubHarmEditor)

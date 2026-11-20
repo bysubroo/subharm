@@ -13,6 +13,7 @@ struct VoiceLine
 {
     std::vector<int> semis;   // shift in semitones per lead note
     LineType type = LineType::ThirdUp;
+    int pedalMidi = -1;       // >= 0: UNIS / UNIS 5TH, one constant note
 };
 
 // The voicing brain. Interval lines (3rd/5th/octave/unison) move strictly in the key,

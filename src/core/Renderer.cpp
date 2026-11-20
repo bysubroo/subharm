@@ -13,6 +13,10 @@
 #include "world/harvest.h"
 #include "world/synthesis.h"
 
+// generated at configure time from WORLD's Synthesis() with a per-call noise seed (see CMakeLists.txt)
+void SynthesisSeeded (unsigned int seed, const double* f0, int f0_length, const double* const* spectrogram,
+                      const double* const* aperiodicity, int fft_size, double frame_period, int fs, int y_length, double* y);
+
 namespace subharm
 {
 
@@ -23,15 +27,24 @@ std::string RenderedVoice::name() const
 
 namespace
 {
-    struct HumanizeParams { double timeMs, detuneCents, driftCents; };
+    // Revoice-style double variation: every voice is its own "take" with a variable
+    // delay (per note, early or late), its own pitch offsets per note, its own scoop
+    // into notes, drift, vibrato depth, level ride and formant.
+    struct HumanizeParams
+    {
+        double delayMinMs, delayMaxMs;   // base offset of the take
+        double noteJitterMs;             // extra offset per note
+        double detuneCents, noteCents, driftCents, scoopCents;
+        double levelDb, formantJitter;
+    };
 
     HumanizeParams humanizeFor (Humanize h)
     {
         switch (h)
         {
-            case Humanize::Tight:   return { 6.0, 3.0, 2.0 };
-            case Humanize::Natural: return { 16.0, 7.0, 6.0 };
-            default:                return { 32.0, 14.0, 12.0 };
+            case Humanize::Tight:   return {  6.0, 14.0,  5.0, 3.0,  3.0,  3.0,  8.0, 0.7, 0.008 };
+            case Humanize::Natural: return { 12.0, 26.0, 11.0, 5.0,  6.0,  6.0, 15.0, 1.5, 0.015 };
+            default:                return { 20.0, 40.0, 20.0, 9.0, 10.0, 10.0, 25.0, 2.5, 0.025 };
         }
     }
 
@@ -240,7 +253,9 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
     {
         switch (t)
         {
-            case LineType::Unison:     return 0.25f;
+            case LineType::Double:     return 0.8f;    // doubles wide, like a stereo doubler
+            case LineType::PedalRoot:  return 0.35f;
+            case LineType::PedalFifth: return 0.5f;
             case LineType::ThirdUp:    case LineType::ThirdDown: return 0.45f;
             case LineType::FifthUp:    case LineType::FifthDown: return 0.6f;
             case LineType::OctaveUp:   case LineType::OctaveDown: return 0.7f;
@@ -280,18 +295,62 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
             semis.swap (s2);
         }
 
-        const double delayMs = hp.timeMs * (0.25 + 0.5 * rng.uniform());          // backing singers sit slightly late
-        SlowNoise timeNoise (rng), pitchNoise (rng, 0.2, 0.9);
+        // ---------------- this voice's "take" ----------------
+        const size_t numNotes = out.notes.size();
+        const double sign = side < 0 ? 1.0 : (rng.uniform() < 0.6 ? -1.0 : 1.0);   // L sits late, R may push
+        const double baseMs = sign * (hp.delayMinMs + (hp.delayMaxMs - hp.delayMinMs) * rng.uniform());
+        std::vector<double> noteOffMs (numNotes), noteCents (numNotes), noteScoop (numNotes);
+        for (size_t k = 0; k < numNotes; ++k)
+        {
+            noteOffMs[k] = baseMs + hp.noteJitterMs * rng.bipolar();
+            noteCents[k] = hp.noteCents * rng.bipolar();
+            noteScoop[k] = hp.scoopCents * (0.3 + 0.7 * rng.uniform());
+        }
+
+        // timing offset per output frame: held per note, smooth moves between notes
+        std::vector<double> offFr (F, baseMs / framePeriod);
+        {
+            int last = -1;
+            for (int i = 0; i < F; ++i) { if (frameNote[i] >= 0) last = frameNote[i]; if (last >= 0) offFr[i] = noteOffMs[(size_t) last] / framePeriod; }
+            int next = -1;
+            for (int i = F - 1; i >= 0; --i) { if (frameNote[i] >= 0) next = frameNote[i]; else if (next >= 0 && i < (numNotes ? out.notes[0].firstFrame : 0)) offFr[i] = noteOffMs[(size_t) next] / framePeriod; }
+            // moving average (120 ms): slope stays < 1 so time never runs backwards
+            const int W = std::max (1, (int) std::lround (120.0 / framePeriod));
+            std::vector<double> sm (F);
+            double acc = 0; std::vector<double> pre (F + 1, 0.0);
+            for (int i = 0; i < F; ++i) pre[(size_t) i + 1] = pre[(size_t) i] + offFr[(size_t) i];
+            for (int i = 0; i < F; ++i)
+            {
+                const int a0 = std::max (0, i - W / 2), a1 = std::min (F, i + W / 2 + 1);
+                sm[(size_t) i] = (pre[(size_t) a1] - pre[(size_t) a0]) / (a1 - a0);
+            }
+            (void) acc;
+            offFr.swap (sm);
+        }
+
+        // pitch variation per source frame (cents -> semitones): per-note offset + scoop into the note
+        std::vector<double> varSemis (F, 0.0);
+        for (int j = 0; j < F; ++j)
+        {
+            const int k = frameNote[j];
+            if (k < 0) continue;
+            const double intoNote = (j - out.notes[(size_t) k].firstFrame) * framePeriod;   // ms
+            varSemis[(size_t) j] = (noteCents[(size_t) k] - noteScoop[(size_t) k] * std::exp (-intoNote / 45.0)) / 100.0;
+        }
+
+        SlowNoise timeNoise (rng, 0.5, 2.0), pitchNoise (rng, 0.2, 0.9), levelNoise (rng, 0.3, 1.2);
         const double detune = hp.detuneCents * rng.bipolar() / 100.0;
-        double alpha = 1.0 + crewFormantBase (st.crew) + crewFormantSpread (st.crew) * rng.bipolar() + dp.formant;
+        const double vibrato = dp.vibrato * (0.55 + 0.45 * rng.uniform());
+        double alpha = 1.0 + crewFormantBase (st.crew) + crewFormantSpread (st.crew) * rng.bipolar() + dp.formant
+                       + hp.formantJitter * rng.bipolar();
         if (lowLine) alpha -= 0.015;          // low lines sound like lower singers
-        alpha += 0.012 * side;                // L and R are two slightly different takes
-        const double breath = dp.breath + (side > 0 ? 0.02 : 0.0);
+        const double breath = dp.breath + 0.03 * rng.uniform();
+        const double pedalHz = line.pedalMidi >= 0 ? 440.0 * std::pow (2.0, (line.pedalMidi - 69) / 12.0) : 0.0;
 
         for (int i = 0; i < F; ++i)
         {
             const double t = i * framePeriod / 1000.0;
-            double src = i - (delayMs + 0.5 * hp.timeMs * timeNoise.at (t)) / framePeriod;
+            double src = i - offFr[(size_t) i] - 0.25 * hp.noteJitterMs * timeNoise.at (t) / framePeriod;
             src = std::clamp (src, 0.0, (double) (F - 1));
             const int i0 = (int) src, i1 = std::min (F - 1, i0 + 1);
             const double fr = src - i0;
@@ -301,7 +360,7 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
             {
                 double lf = (1 - fr) * logf[i0] + fr * logf[i1];
                 double ls = (1 - fr) * logfSmooth[i0] + fr * logfSmooth[i1];
-                lf = ls + dp.vibrato * (lf - ls);
+                lf = ls + vibrato * (lf - ls);
                 f = std::exp (lf);
             }
             else
@@ -309,9 +368,22 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
 
             if (f > 0)
             {
-                double sh = (1 - fr) * semis[i0] + fr * semis[i1];
-                sh += detune + hp.driftCents / 100.0 * pitchNoise.at (t);
-                f *= std::pow (2.0, sh / 12.0);
+                const double var = (1 - fr) * varSemis[(size_t) i0] + fr * varSemis[(size_t) i1]
+                                   + detune + hp.driftCents / 100.0 * pitchNoise.at (t);
+                if (pedalHz > 0)
+                {
+                    // UNIS: one constant note; keep only a little of the lead's own life (vibrato, tuning)
+                    const int k = frameNote[(size_t) (fr < 0.5 ? i0 : i1)];
+                    double dev = 0.0;
+                    if (k >= 0) dev = 12.0 * std::log2 (f / (440.0 * std::pow (2.0, (out.notes[(size_t) k].midi - 69) / 12.0)));
+                    dev = std::clamp (dev, -0.5, 0.5) * 0.6;
+                    f = pedalHz * std::pow (2.0, (dev + var) / 12.0);
+                }
+                else
+                {
+                    const double sh = (1 - fr) * semis[i0] + fr * semis[i1] + var;
+                    f *= std::pow (2.0, sh / 12.0);
+                }
             }
             vf0[i] = f;
 
@@ -327,7 +399,13 @@ bool renderStack (const LeadAnalysis& la, const std::vector<ChordSeg>& chords, d
             }
         }
 
-        Synthesis (vf0.data(), F, vspP.data(), vapP.data(), fftSize, framePeriod, fs, n, y.data());
+        // own noise seed per voice: identical breath noise in every voice = phasing
+        SynthesisSeeded (st.seed * 2654435761u + (unsigned int) v * 97u + 1u,
+                         vf0.data(), F, vspP.data(), vapP.data(), fftSize, framePeriod, fs, n, y.data());
+
+        // slow level ride (a real singer never sits at one level)
+        for (int s2 = 0; s2 < n; ++s2)
+            y[(size_t) s2] *= std::pow (10.0, hp.levelDb * levelNoise.at (s2 / (double) fs) / 20.0);
 
         RenderedVoice rv;
         rv.type = line.type;

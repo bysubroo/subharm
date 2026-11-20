@@ -189,9 +189,9 @@ int main (int argc, char** argv)
         juce::StringArray stemNames;
         for (auto& f : stems) stemNames.add (juce::File (f).getFileNameWithoutExtension());
         std::printf ("       stems: %s\n", stemNames.joinIntoString (", ").toRawUTF8());
-        check (stems.size() == 10 && stemNames.contains ("SubHarm 3RD UP L") && stemNames.contains ("SubHarm CHORD HARMONY HIGH R")
-               && stemNames.contains ("SubHarm OCTAVE DOWN L") && stemNames.contains ("SubHarm UNIS R"),
-               "STEMS: " + juce::String (stems.size()) + " files named by line + side (Full preset = 5 lines x L/R)");
+        check (stems.size() == 8 && stemNames[0] == "SubHarm UNIS L" && stemNames.contains ("SubHarm 3RD UP R")
+               && stemNames.contains ("SubHarm OCTAVE UP L") && stemNames.contains ("SubHarm OCTAVE DOWN R"),
+               "STEMS: " + juce::String (stems.size()) + " files, default stack UNIS + 3RD UP + OCT UP + OCT DOWN, L/R each");
     }
     if (mix.size() == 1)
     {

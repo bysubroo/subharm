@@ -23,8 +23,8 @@ void Take::computePeaks()
 juce::String StackEntry::label() const
 {
     juce::StringArray names;
-    for (int i = 0; i < kNumLineTypes; ++i)
-        if (hasLine (settings.lines, (LineType) i)) names.add (lineName ((LineType) i));
+    for (auto t : kLineDisplayOrder)
+        if (hasLine (settings.lines, t)) names.add (lineName (t));
     return names.joinIntoString (juce::String::fromUTF8 (" · "));
 }
 
@@ -60,10 +60,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SubHarmProcessor::createLayo
                                                   AudioParameterFloatAttributes().withLabel ("%")));
     l.add (std::make_unique<AudioParameterBool> (ParameterID { "leadThru", 1 }, "Lead through", true));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "key", 1 }, "Key", keyChoices(), 0));
-    const auto full = presetLines (StackSize::Full);
+    const auto defaults = presetLines (StackSize::Tall);   // UNIS + 3RD UP + OCT UP + OCT DOWN
     for (int i = 0; i < kNumLineTypes; ++i)
         l.add (std::make_unique<AudioParameterBool> (ParameterID { "line" + String (i), 1 }, lineName ((LineType) i),
-                                                     hasLine (full, (LineType) i)));
+                                                     hasLine (defaults, (LineType) i)));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "flavour", 1 }, "Flavour", StringArray { "R&B", "Pop", "Clean", "Gospel" }, 0));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "humanize", 1 }, "Humanize", StringArray { "Tight", "Natural", "Loose" }, 1));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { "crew", 1 }, "Voices", StringArray { "Your voice", "Wide crew", "Deeper crew", "Lighter crew" }, 0));
@@ -140,15 +140,25 @@ void SubHarmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     juce::int64 t = 0;
     double ppq = 0.0, bpm = 0.0;
     int beatsPerBar = 4;
+    bool hostTransport = false;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
         {
+            hostTransport = true;
             playing = pos->getIsPlaying();
             t = pos->getTimeInSamples().orFallback (0);
             ppq = pos->getPpqPosition().orFallback (0.0);
             bpm = pos->getBpm().orFallback (0.0);
             if (auto ts = pos->getTimeSignature()) beatsPerBar = ts->numerator;
         }
+    if (! hostTransport)
+    {
+        // Standalone app (no DAW transport): an internal clock runs while recording
+        const auto st = (RecState) recState.load();
+        playing = st == RecState::Armed || st == RecState::Recording;
+        t = internalTime;
+        internalTime += numSamples;
+    }
     hostPlaying = playing;
     hostTime = t;
 
@@ -198,6 +208,7 @@ void SubHarmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         buffer.clear (c, 0, numSamples);   // never leak the side chain to the output
 
     // ---- play stacks locked to the timeline ----
+    stackOutLevel = stackOutLevel.load() * 0.85f;
     if (! playing) return;
     const juce::SpinLock::ScopedTryLockType lock (playLock);
     if (! lock.isLocked() || playback == nullptr || playback->items.empty()) return;
@@ -209,6 +220,7 @@ void SubHarmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     float* outL = buffer.getWritePointer (0);
     float* outR = outCh > 1 ? buffer.getWritePointer (1) : nullptr;
 
+    float peak = 0.0f;
     for (const auto& item : set.items)
     {
         const juce::int64 len = (juce::int64) item.L.size();
@@ -223,8 +235,10 @@ void SubHarmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             const float r = item.R[i0] + fr * (item.R[i0 + 1] - item.R[i0]);
             if (outR) { outL[i] += l * gain; outR[i] += r * gain; }
             else outL[i] += 0.5f * (l + r) * gain;
+            peak = std::max (peak, std::max (std::abs (l), std::abs (r)) * gain);
         }
     }
+    stackOutLevel = std::max (stackOutLevel.load(), peak);
 }
 
 // =====================================================================================
@@ -717,7 +731,7 @@ void SubHarmProcessor::buildExportBuffers (bool stems, std::vector<std::vector<f
 
     // STEMS: one dry mono track per line + side ("3RD UP L"), all parts of that line summed
     chPerFile = 1;
-    for (int ti = 0; ti < kNumLineTypes; ++ti)
+    for (auto lineType : kLineDisplayOrder)
         for (int side : { -1, 1 })
         {
             std::vector<float> m;
@@ -727,7 +741,7 @@ void SubHarmProcessor::buildExportBuffers (bool stems, std::vector<std::vector<f
                 auto r = getResult (*s); if (r == nullptr) continue;
                 for (const auto& voice : r->voices)
                 {
-                    if ((int) voice.type != ti || voice.side != side) continue;
+                    if (voice.type != lineType || voice.side != side) continue;
                     if (m.empty()) m.assign (len, 0.0f);
                     const auto off = (size_t) std::llround (s->partStart * take.sampleRate);
                     for (size_t i = 0; i < voice.audio.size() && off + i < len; ++i) m[off + i] += voice.audio[i] * voice.gain;
@@ -735,7 +749,7 @@ void SubHarmProcessor::buildExportBuffers (bool stems, std::vector<std::vector<f
             }
             if (m.empty()) continue;
             chans.push_back (std::move (m));
-            names.push_back (juce::String ("SubHarm ") + lineName ((LineType) ti) + (side < 0 ? " L" : " R"));
+            names.push_back (juce::String ("SubHarm ") + lineName (lineType) + (side < 0 ? " L" : " R"));
         }
 }
 

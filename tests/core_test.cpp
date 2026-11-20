@@ -4,6 +4,7 @@
 // Checks chord/key detection and renders every flavour to WAV for listening.
 #include <algorithm>
 #include <map>
+#include <set>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -124,10 +125,10 @@ int main (int argc, char** argv)
     for (int fi = 0; fi < 4; ++fi)
     {
         StackSettings st;
-        st.lines = 0x1FF; st.flavour = flavours[fi]; st.delivery = fi == 3 ? Delivery::Airy : Delivery::Natural;
+        st.lines = 0x7FF; st.flavour = flavours[fi]; st.delivery = fi == 3 ? Delivery::Airy : Delivery::Natural;
         RenderedStack rs;
         bool r = renderStack (vocal.data(), n, fs, ca.chords, 0.0, ca.key, st, rs);
-        renderOk &= r && rs.voices.size() == 18;
+        renderOk &= r && rs.voices.size() == 22;
         std::printf ("\n%s: %zu notes, %zu voices\n", toString (st.flavour), rs.notes.size(), rs.voices.size());
         std::printf ("  %-6s", "lead");
         for (auto& l : rs.lines) std::printf (" %-9.9s", lineName (l.type));
@@ -145,6 +146,40 @@ int main (int argc, char** argv)
             std::printf ("\n");
         }
         std::printf ("  off-key harmony notes: %d\n", offKey);
+        // UNIS / UNIS 5TH: one constant note on the tonic / 5th of the key
+        for (auto& l : rs.lines)
+            if (l.type == LineType::PedalRoot || l.type == LineType::PedalFifth)
+            {
+                std::set<int> pitches;
+                for (size_t k = 0; k < rs.notes.size(); ++k) pitches.insert (rs.notes[k].midi + l.semis[k]);
+                const int want = (ca.key.tonic + (l.type == LineType::PedalFifth ? 7 : 0)) % 12;
+                const bool ok1 = pitches.size() == 1 && *pitches.begin() % 12 == want;
+                std::printf ("  %s pedal: %s (%s)\n", lineName (l.type), ok1 ? "OK" : "WRONG", pitchClassName (*pitches.begin()).c_str());
+                renderOk &= ok1;
+            }
+        // phasing: correlation between the two takes of the DOUBLE and between DOUBLE and the lead
+        {
+            const std::vector<float>* dl = nullptr; const std::vector<float>* dr = nullptr;
+            for (auto& v : rs.voices) if (v.type == LineType::Double) (v.side < 0 ? dl : dr) = &v.audio;
+            auto corr = [&] (const std::vector<float>& a, const std::vector<float>& b)
+            {
+                double best = 0;
+                for (int lag = -96; lag <= 96; lag += 4)   // +-2 ms: the comb-filter zone
+                {
+                    double ab = 0, aa = 0, bb = 0;
+                    for (int i = 4800; i < n - 4800; i += 2)
+                    {
+                        const double x = a[(size_t) i], y = b[(size_t) (i + lag)];
+                        ab += x * y; aa += x * x; bb += y * y;
+                    }
+                    best = std::max (best, std::abs (ab) / std::sqrt (aa * bb + 1e-12));
+                }
+                return best;
+            };
+            const double cLR = corr (*dl, *dr), cLead = corr (*dl, vocal);
+            std::printf ("  DOUBLE correlation (peak, +-2 ms): L vs R %.2f, L vs lead %.2f\n", cLR, cLead);
+            renderOk &= cLR < 0.5 && cLead < 0.5;
+        }
         renderOk &= offKey == 0;
         // Verify: each rendered line really sings its planned note
         int hit = 0, tot = 0, unv = 0;

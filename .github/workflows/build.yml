@@ -40,69 +40,62 @@ jobs:
           path: out/
 
   windows:
-    name: Windows VST3
+    name: Windows (VST3 + app + installer)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - name: Configure
         run: cmake -B build -A x64 -DSUBHARM_BUILD_TESTS=ON
       - name: Build
-        run: cmake --build build --config Release --target SubHarm_VST3 subharm_core_test -- /m
+        run: cmake --build build --config Release --target SubHarm_VST3 SubHarm_Standalone subharm_core_test -- /m
       - name: Core test
         run: |
           mkdir out
           .\build\tests\Release\subharm_core_test.exe out
-      - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item -Recurse build/src/plugin/SubHarm_artefacts/Release/VST3/SubHarm.vst3 dist/
-          Copy-Item installer/windows/Install-SubHarm.bat dist/
-          Copy-Item installer/windows/Install-SubHarm.ps1 dist/
-          Copy-Item README.md dist/
       - name: Build .exe installer (Inno Setup)
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
           $ver = (Select-String -Path CMakeLists.txt -Pattern 'project \(SubHarm VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          $art = "$pwd\build\src\plugin\SubHarm_artefacts\Release"
           New-Item -ItemType Directory -Force -Path installer-out | Out-Null
-          & $iscc "/DAppVersion=$ver" "/DSrcDir=$pwd\build\src\plugin\SubHarm_artefacts\Release\VST3\SubHarm.vst3" "/O$pwd\installer-out" installer\windows\SubHarm.iss
+          & $iscc "/DAppVersion=$ver" "/DVst3Dir=$art\VST3\SubHarm.vst3" "/DAppExe=$art\Standalone\SubHarm.exe" "/O$pwd\installer-out" installer\windows\SubHarm.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-ChildItem installer-out
       - uses: actions/upload-artifact@v4
         with:
           name: SubHarm-Windows-Installer
           path: installer-out/*.exe
-      - uses: actions/upload-artifact@v4
-        with:
-          name: SubHarm-Windows-VST3
-          path: dist/
 
   macos:
-    name: macOS VST3 + AU (Universal)
+    name: macOS (VST3 + AU + app + pkg, Universal)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Configure
         run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSUBHARM_BUILD_TESTS=OFF
       - name: Build
-        run: cmake --build build --config Release --target SubHarm_VST3 SubHarm_AU -- -quiet
-      - name: Ad-hoc sign + package
+        run: cmake --build build --config Release --target SubHarm_VST3 SubHarm_AU SubHarm_Standalone -- -quiet
+      - name: Ad-hoc sign + .pkg installer
         run: |
+          VER=$(sed -n 's/^project (SubHarm VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          ART=build/src/plugin/SubHarm_artefacts/Release
+          ROOT=pkgroot
+          mkdir -p "$ROOT/Library/Audio/Plug-Ins/VST3" "$ROOT/Library/Audio/Plug-Ins/Components" "$ROOT/Applications"
+          cp -R "$ART/VST3/SubHarm.vst3" "$ROOT/Library/Audio/Plug-Ins/VST3/"
+          cp -R "$ART/AU/SubHarm.component" "$ROOT/Library/Audio/Plug-Ins/Components/"
+          cp -R "$ART/Standalone/SubHarm.app" "$ROOT/Applications/"
+          for b in "$ROOT/Library/Audio/Plug-Ins/VST3/SubHarm.vst3" "$ROOT/Library/Audio/Plug-Ins/Components/SubHarm.component" "$ROOT/Applications/SubHarm.app"; do
+            codesign --force --deep -s - "$b"
+          done
           mkdir -p dist
-          cp -R build/src/plugin/SubHarm_artefacts/Release/VST3/SubHarm.vst3 dist/
-          cp -R build/src/plugin/SubHarm_artefacts/Release/AU/SubHarm.component dist/
-          codesign --force --deep -s - dist/SubHarm.vst3
-          codesign --force --deep -s - dist/SubHarm.component
-          cp installer/macos/install-subharm.command dist/
-          chmod +x dist/install-subharm.command
-          cp README.md dist/
-          cd dist && zip -qry ../SubHarm-macOS.zip .
+          pkgbuild --root "$ROOT" --identifier xyz.subroo.subharm --version "$VER" --install-location / "dist/SubHarm-$VER-macOS.pkg"
+          ls -la dist
       - uses: actions/upload-artifact@v4
         with:
-          name: SubHarm-macOS
-          path: SubHarm-macOS.zip
+          name: SubHarm-macOS-Installer
+          path: dist/*.pkg
 
   release:
     name: GitHub release (tags only)
@@ -115,11 +108,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Zip Windows build
-        run: cd artifacts/SubHarm-Windows-VST3 && zip -qry ../../SubHarm-Windows.zip .
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/SubHarm-Windows-Installer/*.exe
-            SubHarm-Windows.zip
-            artifacts/SubHarm-macOS/SubHarm-macOS.zip
+            artifacts/SubHarm-macOS-Installer/*.pkg

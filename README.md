@@ -8,9 +8,14 @@ Ličan alat Studija SubRoo. Klon ideje Controlla Stacks, napisan od nule.
 
 ## Instalacija
 
-**Windows (VST3):** pokreni `SubHarm-x.y.z-Windows-Setup.exe` (ili iz zipa dvoklikni `Install-SubHarm.bat`). Deinstalacija: Settings → Apps → SubHarm. Plugin ide u `C:\Program Files\Common Files\VST3`. Posle toga uradi rescan plugina u DAW-u.
+Sve verzije su na GitHub **Releases** (stare ostaju dostupne).
 
-**macOS (VST3 + AU, Apple silicon i Intel):** raspakuj `SubHarm-macOS.zip` i dvoklikni `install-subharm.command`.
+- **Windows:** `SubHarm-x.y.z-Windows-Setup.exe` instalira VST3 plugin (`C:\Program Files\Common Files\VST3`) i aplikaciju **SubHarm** (Start meni). Deinstalacija: Settings → Apps → SubHarm.
+- **macOS (Apple silicon + Intel):** `SubHarm-x.y.z-macOS.pkg` instalira VST3, AU i aplikaciju u Applications. Installer nije potpisan Apple sertifikatom: prvi put desni klik → *Open*.
+
+Posle instalacije uradi rescan plugina u DAW-u.
+
+**Standalone aplikacija:** isti SubHarm bez DAW-a. U Audio Settings izaberi ulaze: 1/2 je vokal, 3/4 je side chain (beat). RECORD odmah snima, a ponovni klik zaustavlja. Stackove izvlačiš preko MIX/STEMS ili Export-a. Reprodukcija stackova uz timeline postoji samo u DAW-u.
 
 ## Kako se koristi
 
@@ -32,10 +37,10 @@ Projekat (take, akordi, delovi, stackovi) se čuva sa DAW projektom. Audio je u 
 | Kontrola | Šta radi |
 |---|---|
 | **Key** | Auto (prepoznaje sam) ili ručno izabran ključ. Ručni ključ zaključava i akorde: prepoznaju se samo akordi iz tog ključa. Promena ključa posle snimanja ponovo čita akorde |
-| **Lines** | UNIS · 3RD UP · 3RD DOWN · 5TH UP · 5TH DOWN · OCT UP · OCT DOWN · CHORD HIGH · CHORD LOW. Svaka linija se peva dvaput (L + R take). Intervalne linije idu striktno po skali ključa, a CHORD linije biraju tonove akorda (u ključu) sa voice leadingom |
-| **Preset** | Short: 3RD UP + CHORD LOW · Tall: 3RD UP + 3RD DOWN + 5TH DOWN · Full: UNIS + 3RD UP + 3RD DOWN + OCT DOWN + CHORD HIGH |
+| **Lines** | **UNIS**: jedna konstantna nota na tonici ključa (pedal, npr. F# u F# minoru) · **UNIS 5TH**: pedal na kvinti ključa (G u C-duru) · **DOUBLE**: tvoja melodija duplirana (Revoice-stil, široko L/R) · 3RD UP/DOWN · 5TH UP/DOWN · OCT UP/DOWN · CHORD HI/LO. Svaka linija se peva dvaput (L + R take). Intervalne linije idu striktno po skali ključa, a CHORD linije biraju tonove akorda (u ključu) sa voice leadingom |
+| **Preset** | Short: UNIS + 3RD UP · **SubRoo (default)**: UNIS + 3RD UP + OCT UP + OCT DOWN · Full: DOUBLE + UNIS + UNIS 5TH + 3RD UP + 3RD DOWN + OCT UP + OCT DOWN + CHORD HI |
 | **Flavour** | Boji CHORD linije. Clean: trozvuci. Pop: + add9. R&B: + septime i none. Gospel: + 11/13 |
-| **Humanize** | Tight / Natural / Loose: kašnjenje, drift visine i detune po glasu |
+| **Humanize** | Tight / Natural / Loose: svaki glas je svoj "take", kao Revoice Doubler: kašnjenje po noti (ranije ili kasnije), pomeraj visine po noti, scoop u notu, drift, dubina vibrata, varijacija glasnoće i formanta. Svaki glas ima i svoj šum/dah, pa nema faziranja |
 | **Voices** | Your voice / Wide / Deeper / Lighter crew: formanti po glasu |
 | **Delivery** | Natural / Airy (dah u visinama) / Gentle (mekše, manje vibrata) / Full voice (telo) / Energetic (prezens) |
 | **Sauce** | Širina stereo slike + vazduh + malo saturacije (za playback i MIX; STEMS ostaju suvi) |

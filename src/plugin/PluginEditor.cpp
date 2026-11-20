@@ -173,17 +173,31 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     addAndMakeVisible (keyBox);
     keyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "key", keyBox);
 
-    static const char* shortNames[kNumLineTypes] = { "UNIS", "3RD UP", "3RD DOWN", "5TH UP", "5TH DOWN",
-                                                    "OCT UP", "OCT DOWN", "CHORD HI", "CHORD LO" };
-    for (int i = 0; i < kNumLineTypes; ++i)
+    auto shortName = [] (LineType t) -> juce::String
     {
-        auto* b = lineButtons.add (new juce::TextButton (shortNames[i]));
+        switch (t)
+        {
+            case LineType::OctaveUp:   return "OCT UP";
+            case LineType::OctaveDown: return "OCT DOWN";
+            case LineType::ChordHigh:  return "CHORD HI";
+            case LineType::ChordLow:   return "CHORD LO";
+            default:                   return lineName (t);
+        }
+    };
+    for (auto t : kLineDisplayOrder)
+    {
+        const int i = (int) t;
+        auto* b = lineButtons.add (new juce::TextButton (shortName (t)));
         b->setClickingTogglesState (true);
-        b->setTooltip (juce::String (lineName ((LineType) i)) + ": rendered as an L + R pair");
+        juce::String tip = lineName (t);
+        if (t == LineType::PedalRoot) tip << ": one constant note on the key's tonic";
+        else if (t == LineType::PedalFifth) tip << ": one constant note on the key's 5th";
+        else if (t == LineType::Double) tip << ": your melody doubled, Revoice-style";
+        b->setTooltip (tip + " (L + R take)");
         addAndMakeVisible (b);
         lineAtts.add (new juce::AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, "line" + juce::String (i), *b));
     }
-    const char* presetNames[3] = { "Short", "Tall", "Full" };
+    const char* presetNames[3] = { "Short", "SubRoo", "Full" };
     for (int i = 0; i < 3; ++i)
     {
         auto* b = presetButtons.add (new juce::TextButton (presetNames[i]));
@@ -244,6 +258,15 @@ SubHarmEditor::SubHarmEditor (SubHarmProcessor& p)
     };
     addAndMakeVisible (exportButton);
 
+    folderButton.setButtonText ("SESSION FOLDER");
+    folderButton.onClick = [this]
+    {
+        auto f = proc.getSessionFolder();
+        if (f.isDirectory()) f.revealToUser();
+        else f.getParentDirectory().revealToUser();
+    };
+    addAndMakeVisible (folderButton);
+
     proc.addChangeListener (this);
     setResizable (true, true);
     setResizeLimits (1060, 840, 2200, 1500);
@@ -273,21 +296,12 @@ void SubHarmEditor::drawCard (juce::Graphics& g, juce::Rectangle<int> r, const j
 
 void SubHarmEditor::paint (juce::Graphics& g)
 {
-    if (faceplate.getWidth() != getWidth() || faceplate.getHeight() != getHeight())
-        faceplate = makeFaceplate (getWidth(), getHeight(), kEar);
+    if (faceplate.getWidth() != getWidth() || faceplate.getHeight() != getHeight() - 30)
+        faceplate = makeFaceplate (getWidth(), getHeight() - 30, kEar);
     g.drawImageAt (faceplate, 0, 0);
 
-    // ---- header: name badge ----
-    {
-        auto logo = juce::Rectangle<int> (headerArea.getX(), headerArea.getY() + 2, 250, headerArea.getHeight() - 4);
-        g.setFont (font (27.0f, true).withExtraKerningFactor (0.06f));
-        g.setColour (juce::Colours::black.withAlpha (0.6f));
-        g.drawText ("SubHarm", logo.withHeight (30).translated (0, 1), juce::Justification::centredLeft);
-        g.setColour (text);
-        g.drawText ("SubHarm", logo.withHeight (30), juce::Justification::centredLeft);
-        engrave (g, "VOCAL HARMONY STACKER", { logo.getX() + 1, logo.getY() + 30, 240, 14 }, juce::Justification::centredLeft, dim, 9.0f);
-        engrave (g, "SH-2  |  SubRoo", { logo.getX() + 150, logo.getY() + 8, 120, 14 }, juce::Justification::centredLeft, accent, 9.0f);
-    }
+    // ---- header: nameplate ----
+    drawNameplate (g, nameplate.toFloat(), "SubHarm", "VOCAL HARMONY STACKER  SH-2");
 
     // ---- header: song display (key / tempo / length) ----
     {
@@ -345,15 +359,39 @@ void SubHarmEditor::paint (juce::Graphics& g)
     engrave (g, "SAUCE", { sauceKnob.getX(), sauceKnob.getY() - 14, sauceKnob.getWidth(), 14 }, juce::Justification::centred, dim, 9.5f);
     engrave (g, "LEVEL", { levelKnob.getX(), levelKnob.getY() - 14, levelKnob.getWidth(), 14 }, juce::Justification::centred, dim, 9.5f);
     engrave (g, "DRAG TO YOUR DAW", { mixTile.getX(), mixTile.getY() - 16, 200, 14 }, juce::Justification::centredLeft, faint, 9.0f);
+    drawLedLadder (g, outMeter.toFloat(), outLevel, "OUT");
+
+    // ---- bottom toolbar ----
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1c1b19), 0, (float) toolbar.getY(), juce::Colour (0xff121110), 0, (float) toolbar.getBottom(), false));
+    g.fillRect (toolbar);
+    g.setColour (juce::Colours::black);
+    g.drawHorizontalLine (toolbar.getY(), (float) toolbar.getX(), (float) toolbar.getRight());
+    g.setColour (juce::Colours::white.withAlpha (0.06f));
+    g.drawHorizontalLine (toolbar.getY() + 1, (float) toolbar.getX(), (float) toolbar.getRight());
+    auto tb = toolbar.reduced (kEar + 12, 0);
+    g.setFont (font (11.0f, true).withExtraKerningFactor (0.06f));
+    g.setColour (text);
+    g.drawText ("SubHarm", tb.removeFromLeft (80), juce::Justification::centredLeft);
+    g.setColour (faint);
+    g.setFont (font (10.5f));
+    g.drawText (juce::String ("v") + SUBHARM_VERSION + juce::String::fromUTF8 ("  ·  SubRoo  ·  ") + status,
+                tb.withTrimmedRight (170), juce::Justification::centredLeft);
 }
 
 void SubHarmEditor::resized()
 {
-    auto r = getLocalBounds().reduced (kEar + 12, 12);
+    auto full = getLocalBounds();
+    toolbar = full.removeFromBottom (30);
+    {
+        auto tb = toolbar.reduced (kEar + 12, 4);
+        folderButton.setBounds (tb.removeFromRight (160));
+    }
+    auto r = full.reduced (kEar + 12, 12);
     headerArea = r.removeFromTop (54);
     {
         auto h = headerArea;
-        h.removeFromLeft (290);
+        nameplate = h.removeFromLeft (270).withSizeKeepingCentre (262, 50);
+        h.removeFromLeft (20);
         recordButton.setBounds (h.removeFromLeft (200).withSizeKeepingCentre (200, 40));
         h.removeFromLeft (14);
         leadThru.setBounds (h.removeFromRight (110).withSizeKeepingCentre (110, 30));
@@ -403,13 +441,13 @@ void SubHarmEditor::resized()
     {
         auto c = singCard.reduced (16).withTrimmedTop (32);
         const int rowH = juce::jlimit (22, 34, c.getHeight() / 5 - 5);
-        // lines: two rows (5 + 4)
+        // lines: two rows (6 + 5)
         for (int rowIdx = 0; rowIdx < 2; ++rowIdx)
         {
             auto row = c.removeFromTop (rowH);
             row.removeFromLeft (74);
-            const int first = rowIdx == 0 ? 0 : 5, count = rowIdx == 0 ? 5 : 4;
-            const int bw = row.getWidth() / 5;
+            const int first = rowIdx == 0 ? 0 : 6, count = rowIdx == 0 ? 6 : 5;
+            const int bw = row.getWidth() / 6;
             for (int i = 0; i < count; ++i) lineButtons[first + i]->setBounds (row.removeFromLeft (bw).reduced (2, 0));
             c.removeFromTop (4);
         }
@@ -431,17 +469,20 @@ void SubHarmEditor::resized()
 
     {
         auto c = stacksCard.reduced (14).withTrimmedTop (32);
-        auto bottom = c.removeFromBottom (92);
+        auto bottom = c.removeFromBottom (112);
         c.removeFromBottom (8);
         stacksViewport.setBounds (c);
         stacksList.setBounds (0, 0, c.getWidth() - 10, juce::jmax (c.getHeight(), stacksList.idealHeight()));
 
         bottom.removeFromTop (16);
+        bottom = bottom.withTrimmedBottom (4);
         mixTile.setBounds (bottom.removeFromLeft (100));
         bottom.removeFromLeft (8);
         stemsTile.setBounds (bottom.removeFromLeft (100));
         bottom.removeFromLeft (8);
         exportButton.setBounds (bottom.removeFromRight (80).withSizeKeepingCentre (80, 28));
+        bottom.removeFromRight (8);
+        outMeter = bottom.removeFromRight (26);
         sauceKnob.setBounds (bottom.removeFromLeft (bottom.getWidth() / 2));
         levelKnob.setBounds (bottom);
     }
@@ -449,11 +490,25 @@ void SubHarmEditor::resized()
 
 void SubHarmEditor::refresh()
 {
+    {
+        juce::String st;
+        const auto& tk = proc.getTake();
+        if (tk.isEmpty()) st = "ready: set the side chain, then record";
+        else if (! tk.analysed) st = "reading chords, key and tempo";
+        else
+        {
+            int busy = 0;
+            for (const auto& s : proc.getStacks()) busy += s->state.load() < StackEntry::Done ? 1 : 0;
+            st = busy > 0 ? juce::String ("stacking ") + juce::String (busy) + (busy == 1 ? " part" : " parts")
+                          : juce::String (proc.getStacks().size()) + " stacks on " + juce::String (proc.getParts().size()) + " parts";
+        }
+        if (st != status) { status = st; repaint (toolbar); }
+    }
     using RS = SubHarmProcessor::RecState;
     switch (proc.getRecState())
     {
-        case RS::Armed:     recordButton.setButtonText ("ARMED - PRESS PLAY"); recordButton.setToggleState (true, juce::dontSendNotification); break;
-        case RS::Recording: recordButton.setButtonText ("RECORDING " + juce::String (proc.getRecordedSeconds(), 0) + "s"); recordButton.setToggleState (true, juce::dontSendNotification); break;
+        case RS::Armed:     recordButton.setButtonText (proc.wrapperType == juce::AudioProcessor::wrapperType_Standalone ? "STARTING..." : "ARMED - PRESS PLAY"); recordButton.setToggleState (true, juce::dontSendNotification); break;
+        case RS::Recording: recordButton.setButtonText ("RECORDING " + juce::String (proc.getRecordedSeconds(), 0) + "s - STOP"); recordButton.setToggleState (true, juce::dontSendNotification); break;
         case RS::Idle:
         case RS::Finished:
         default:
@@ -496,6 +551,10 @@ void SubHarmEditor::timerCallback()
     const float target = juce::jlimit (0.0f, 1.05f, (db + 38.0f) / 23.0f);
     vuNeedle += (target - vuNeedle) * 0.25f;
     repaint (vuArea.expanded (2));
+    const float outDb = juce::Decibels::gainToDecibels (proc.getStackOutLevel(), -60.0f);
+    const float outTarget = juce::jlimit (0.0f, 1.0f, (outDb + 48.0f) / 48.0f);
+    outLevel = outTarget > outLevel ? outTarget : outLevel * 0.9f + outTarget * 0.1f;
+    repaint (outMeter.expanded (4));
 }
 
 } // namespace subharm

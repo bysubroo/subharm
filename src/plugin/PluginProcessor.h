@@ -107,6 +107,7 @@ public:
     void toggleRecord();
     double getRecordedSeconds() const { return recPos.load() / juce::jmax (1.0, getSampleRate()); }
     float getSidechainLevel() const { return sidechainLevel.load(); }
+    float getStackOutLevel() const { return stackOutLevel.load(); }
     bool isSidechainConnected() const { return sidechainConnected.load(); }
     bool isHostPlaying() const { return hostPlaying.load(); }
     double getPlayheadInTake() const;   // seconds, <0 if outside
@@ -181,9 +182,10 @@ private:
     std::atomic<double> recStartPpq { 0.0 }, recBpm { 0.0 };
     std::atomic<int> recBeatsPerBar { 4 };
     juce::int64 lastBlockEnd = -1;
+    juce::int64 internalTime = 0;
 
     // live info
-    std::atomic<float> sidechainLevel { 0.0f };
+    std::atomic<float> sidechainLevel { 0.0f }, stackOutLevel { 0.0f };
     std::atomic<bool> sidechainConnected { false }, hostPlaying { false };
     std::atomic<juce::int64> hostTime { 0 };
 
